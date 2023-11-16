@@ -1,8 +1,20 @@
+from time import sleep
+from ament_index_python import get_package_share_directory
+from moveit import MoveItPy, PlanningSceneMonitor
 import rclpy
+import pyassimp
 from rclpy.time import Duration
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.parameter import Parameter
+
+from geometry_msgs.msg import PoseStamped, Pose, Point
+from shape_msgs.msg import Mesh, MeshTriangle
+from moveit_msgs.msg import CollisionObject
+from std_msgs.msg import Header
+
+from moveit.core.robot_state import RobotState, robotStateToRobotStateMsg
+from moveit_msgs.srv import GetCartesianPath, GetPositionFK
 
 from ariac_msgs.msg import (
     CompetitionState as CompetitionStateMsg,
@@ -36,6 +48,14 @@ from ariac_tutorials.utils import (
     KittingPart
 )
 
+
+class Error(Exception):
+  def __init__(self, value: str):
+      self.value = value
+
+  def __str__(self):
+      return repr(self.value)
+  
 class CompetitionInterface(Node):
     '''
     Class for a competition interface node.
@@ -177,6 +197,16 @@ class CompetitionInterface(Node):
 
         # Attribute to store the current state of the floor robot gripper
         self._floor_robot_gripper_state = VacuumGripperState()
+
+        # Moveit_py variables
+        self._robot_moveit_py = MoveItPy(node_name="ariac_tutorials")
+        self._robot_moveit_py_state = RobotState(self._robot_moveit_py.get_robot_model())
+
+        self._floor_robot = self._robot_moveit_py.get_planning_component("floor_robot")
+        self._ceiling_robot = self._robot_moveit_py.get_planning_component("ceiling_robot")
+
+        self._planning_scene_monitor = self._robot_moveit_py.get_planning_scene_monitor()
+
 
     @property
     def orders(self):
@@ -594,3 +624,182 @@ class CompetitionInterface(Node):
                 rclpy.spin_once(self)
             except KeyboardInterrupt as kb_error:
                 raise KeyboardInterrupt from kb_error
+    
+    def _call_get_cartesian_path (self, 
+                                 waypoints : list,
+                                 max_step : float):
+
+        self.get_logger().info("Getting cartesian path")
+
+        request = GetCartesianPath.Request()
+
+        header = Header()
+        header.frame_id = "world"
+        header.stamp = self.get_clock().now().to_msg()
+
+        request.header = header
+        request.start_state = robotStateToRobotStateMsg(self._robot_moveit_py_state.update())
+        request.group_name = "floor_robot"
+        request.link_name = "floor_gripper"
+        request.waypoints = waypoints
+        request.max_step = max_step
+
+        future = self.get_cartesian_path_client.call_async(request)
+
+
+        rclpy.spin_until_future_complete(self, future, timeout_sec=10)
+
+        if not future.done():
+            raise Error("Timeout reached when calling move_cartesian service")
+
+        result: GetCartesianPath.Response
+        result = future.result()
+
+        return result.solution
+
+    def _call_get_position_fk (self):
+
+        self.get_logger().info("Getting cartesian path")
+
+        request = GetPositionFK.Request()
+
+        header = Header()
+        header.frame_id = "world"
+        header.stamp = self.get_clock().now().to_msg()
+        request.header = header
+
+        request.fk_link_names = ["floor_gripper"]
+
+        request.robot_state = robotStateToRobotStateMsg(self._robot_moveit_py_state.update())
+
+        future = self.get_position_fk_client.call_async(request)
+
+
+        rclpy.spin_until_future_complete(self, future, timeout_sec=10)
+
+        if not future.done():
+            raise Error("Timeout reached when calling move_cartesian service")
+
+        result: GetPositionFK.Response
+        result = future.result()
+
+        return result.pose_stamped
+    
+    def _plan_and_execute(
+        self,
+        robot,
+        planning_component,
+        logger,
+        single_plan_parameters=None,
+        multi_plan_parameters=None,
+        sleep_time=0.0,
+    ):
+        """Helper function to plan and execute a motion."""
+        # plan to goal
+        logger.info("Planning trajectory")
+        if multi_plan_parameters is not None:
+            plan_result = planning_component.plan(
+                multi_plan_parameters=multi_plan_parameters
+            )
+        elif single_plan_parameters is not None:
+            plan_result = planning_component.plan(
+                single_plan_parameters=single_plan_parameters
+            )
+        else:
+            plan_result = planning_component.plan()
+        # execute the plan
+        if plan_result:
+            logger.info("Executing plan")
+            robot_trajectory = plan_result.trajectory
+            logger.info(str(robot_trajectory.joint_model_group_name))
+            robot.execute(robot_trajectory, controllers=[])
+        else:
+            logger.error("Planning failed")
+
+        sleep(sleep_time)
+
+    def move_floor_robot_home(self):
+        self._floor_robot.set_stat_state_to_current_state()
+        self._floor_robot.set_goal_state(confiuration_name="home")
+        self._plan_and_execute(self._robot_moveit_py,self._floor_robot, self.get_logger(), sleep_time=0.0)
+        
+    def _makeMesh(self, name, pose, filename) -> CollisionObject:
+        with pyassimp.load(filename) as scene:
+            assert len(scene.meshes)
+            
+            mesh = Mesh()
+            for face in scene.meshes[0].faces:
+                triangle = MeshTriangle()
+                if hasattr(face, 'indices'):
+                    if len(face.indices) == 3:
+                        triangle.vertex_indices = [face.indices[0],
+                                                    face.indices[1],
+                                                    face.indices[2]]
+                else:
+                    if len(face) == 3:
+                        triangle.vertex_indices = [face[0],
+                                                    face[1],
+                                                    face[2]]
+                mesh.triangles.append(triangle)
+            for vertex in scene.meshes[0].vertices:
+                point = Point()
+                point.x = float(vertex[0])
+                point.y = float(vertex[1])
+                point.z = float(vertex[2])
+                mesh.vertices.append(point)
+            
+        o = CollisionObject()
+        o.header.frame_id = "world"
+        o.id = name
+        o.meshes.append(mesh)
+        o.mesh_poses.append(pose)
+        o.operation = o.ADD
+        return o
+    
+    def _add_model_to_planning_scene(self,
+                                    name : str,
+                                    mesh_file : str,
+                                    model_pose : Pose
+                                    ):
+    
+        package_share_directory = get_package_share_directory("test_competitor")
+        model_path = package_share_directory + "/meshes/"+mesh_file
+        collision_object = self._makeMesh(name, model_pose,model_path, self.get_logger())
+        with self._planning_scene_monitor.read_write() as scene:
+            scene.apply_collision_object(collision_object)
+            scene.current_state.update()
+    
+    def add_objects_to_planning_scene(self):
+        print("HOLD")
+        '''
+        for each object:
+            add_model_to_planning_scene
+        '''
+    
+    def  floor_robot_ick_bin_part(part : PartMsg):
+        print("HOLD")
+        '''
+        read the camera and see if the part is found
+        If the part is found, get the pose of the part and move directly above the part using:
+        
+        self._move_to_cartesian_pose(part_pose)
+
+        
+        
+        Then use use the cartesian path service to move down to the part
+        
+        robot_trajectory = self._call_get_cartesian_path_service_floor_robot(waypoints, max_step)
+        self._robot_moveit_py.execute(robot_trajectory, controllers=[])
+
+        
+        
+        Then attempt to pick up the parts
+        
+        FloorRobotSetGripperState(true);
+        FloorRobotWaitForAttach(3.0);
+        
+
+        Move the robot up
+
+        robot_trajectory = self._call_get_cartesian_path_service_floor_robot(waypoints, max_step)
+        '''
