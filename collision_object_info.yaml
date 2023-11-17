@@ -1,0 +1,209 @@
+bin1:
+  position:
+  - -1.9
+  - 3.375
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: bin.stl
+bin2:
+  position:
+  - -1.9
+  - 2.625
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: bin.stl
+bin3:
+  position:
+  - -1.9
+  - -3.375
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: bin.stl
+bin4:
+  position:
+  - -1.9
+  - -2.625
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: bin.stl
+bin5:
+  position:
+  - -2.65
+  - 3.375
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: bin.stl
+bin6:
+  position:
+  - -2.65
+  - 2.625
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: bin.stl
+bin7:
+  position:
+  - -2.65
+  - -3.375
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: bin.stl
+bin8:
+  position:
+  - -2.65
+  - -2.625
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: bin.stl
+as1:
+  position:
+  - -7.3
+  - 3
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: assembly_station.stl
+as2:
+  position:
+  - -7.3
+  - -3
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: assembly_station.stl
+as3:
+  position:
+  - -12.3
+  - 3
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: assembly_station.stl
+as4:
+  position:
+  - -12.3
+  - -3
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: assembly_station.stl
+assembly_insert1:
+  position:
+  - -7.7
+  - 3
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: assembly_insert.stl
+assembly_insert2:
+  position:
+  - -7.7
+  - -3
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: assembly_insert.stl
+assembly_insert3:
+  position:
+  - -12.7
+  - 3
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: assembly_insert.stl
+assembly_insert4:
+  position:
+  - -12.7
+  - -3
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: assembly_insert.stl
+conveyor:
+  position:
+  - -0.6
+  - 0
+  - 0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: conveyor.stl
+kts1_table:
+  position:
+  - -1.3
+  - 5.84
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: kit_tray_table.stl
+kts2_table:
+  position:
+  - -1.3
+  - -5.84
+  - 0.0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  file: kit_tray_table.stl

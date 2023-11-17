@@ -3,6 +3,7 @@ from ament_index_python import get_package_share_directory
 from moveit import MoveItPy, PlanningSceneMonitor
 import rclpy
 import pyassimp
+import yaml
 from rclpy.time import Duration
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -771,12 +772,26 @@ class CompetitionInterface(Node):
     
     def add_objects_to_planning_scene(self):
         print("HOLD")
-        '''
-        for each object:
-            add_model_to_planning_scene
-        '''
+        with open('collision_object_info.yaml','r') as object_file:
+            objects_dict = yaml.safe_load(object_file)
+        
+        objects_dict : dict
+        for key in objects_dict.keys():
+
+            object_pose = Pose()
+            
+            object_pose.position.x = objects_dict[key]["position"][0]
+            object_pose.position.y = objects_dict[key]["position"][1]
+            object_pose.position.z = objects_dict[key]["position"][2]
+            
+            object_pose.orientation.x = objects_dict[key]["orientation"][0]
+            object_pose.orientation.y = objects_dict[key]["orientation"][1]
+            object_pose.orientation.z = objects_dict[key]["orientation"][2]
+            object_pose.orientation.w = objects_dict[key]["orientation"][3]
+
+            self._add_model_to_planning_scene(key, objects_dict[key]["file"], object_pose)
     
-    def  floor_robot_ick_bin_part(part : PartMsg):
+    def  floor_robot_pick_bin_part(part : PartMsg):
         print("HOLD")
         '''
         read the camera and see if the part is found
