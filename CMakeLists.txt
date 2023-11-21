@@ -29,7 +29,13 @@ install(PROGRAMS
   scripts/tutorial_4.py
   scripts/tutorial_5.py
   scripts/tutorial_6.py
+  scripts/tutorial_9.py
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY
+  launch
+  DESTINATION share/${PROJECT_NAME}
 )
 
 ament_package()

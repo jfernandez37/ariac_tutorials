@@ -13,7 +13,7 @@ for i in range(1,9):
 # ASSEMBLY STATIONS
 assembly_stations_positions = [[x,y,0.0]
                                for x in [-7.3,-12.3]
-                               for y in [3,-3]]
+                               for y in [3.0,-3.0]]
 assembly_stations_rotations = [[0.0,0.0,0.0,1.0] for _ in range(4)]
 
 for i in range(1,5):
@@ -22,7 +22,7 @@ for i in range(1,5):
 # ASSEMBLY BRIEFCASES
 assembly_briefcase_positions = [[x,y,0.0]
                                 for x in [-7.7,-12.7]
-                                for y in [3,-3]]
+                                for y in [3.0,-3.0]]
 assembly_briefcase_rotations = [[0.0,0.0,0.0,1.0] for _ in range(4)]
 
 for i in range(1,5):

@@ -208,6 +208,20 @@ class CompetitionInterface(Node):
 
         self._planning_scene_monitor = self._robot_moveit_py.get_planning_scene_monitor()
 
+        # Parts found in the bins
+        self._left_bins_parts = []
+        self._right_bins_parts = []
+
+        # Left bins camera sub
+        self.left_bins_camera_sub = self.create_subscription(AdvancedLogicalCameraImageMsg,
+                                                             "/ariac/sensors/left_bins_camera/image",
+                                                             self._left_bins_camera_cb,
+                                                             qos_profile_sensor_data)
+        self.right_bins_camera_sub = self.create_subscription(AdvancedLogicalCameraImageMsg,
+                                                             "/ariac/sensors/right_bins_camera/image",
+                                                             self._right_bins_camera_cb,
+                                                             qos_profile_sensor_data)
+
 
     @property
     def orders(self):
@@ -720,10 +734,29 @@ class CompetitionInterface(Node):
         sleep(sleep_time)
 
     def move_floor_robot_home(self):
-        self._floor_robot.set_stat_state_to_current_state()
-        self._floor_robot.set_goal_state(confiuration_name="home")
+        self._floor_robot.set_start_state_to_current_state()
+        self._floor_robot.set_goal_state(configuration_name="home")
         self._plan_and_execute(self._robot_moveit_py,self._floor_robot, self.get_logger(), sleep_time=0.0)
+
+    def _move_floor_robot_to_pose(self,pose : Pose):
+        self.get_logger().info(str(pose))
+        with self._planning_scene_monitor.read_write() as scene:
+            self._floor_robot.set_start_state_to_current_state()
+
+            pose_goal = PoseStamped()
+            pose_goal.header.frame_id = "floor_base_link_inertia"
+            pose_goal.pose.position.x = float(round(pose.position.x, 2))
+            pose_goal.pose.position.y = float(round(pose.position.y, 2))+0.2
+            pose_goal.pose.position.z = float(round(pose.position.z, 2))
+            pose_goal.pose.orientation.x = 0.0
+            pose_goal.pose.orientation.y = 0.0
+            pose_goal.pose.orientation.z = 0.0
+            pose_goal.pose.orientation.w = 1.0
+            self.get_logger().info(str(pose_goal.pose))
+            self._floor_robot.set_goal_state(pose_stamped_msg=pose_goal, pose_link="floor_gripper")
         
+        self._plan_and_execute(self._robot_moveit_py, self._floor_robot, self.get_logger())
+
     def _makeMesh(self, name, pose, filename) -> CollisionObject:
         with pyassimp.load(filename) as scene:
             assert len(scene.meshes)
@@ -762,17 +795,17 @@ class CompetitionInterface(Node):
                                     mesh_file : str,
                                     model_pose : Pose
                                     ):
-    
+        self.get_logger().info(f"Adding {name} to planning scene")
         package_share_directory = get_package_share_directory("test_competitor")
         model_path = package_share_directory + "/meshes/"+mesh_file
-        collision_object = self._makeMesh(name, model_pose,model_path, self.get_logger())
+        collision_object = self._makeMesh(name, model_pose,model_path)
         with self._planning_scene_monitor.read_write() as scene:
             scene.apply_collision_object(collision_object)
             scene.current_state.update()
     
     def add_objects_to_planning_scene(self):
-        print("HOLD")
-        with open('collision_object_info.yaml','r') as object_file:
+        package_share_directory = get_package_share_directory("ariac_tutorials")
+        with open(package_share_directory+"/config/collision_object_info.yaml",'r') as object_file:
             objects_dict = yaml.safe_load(object_file)
         
         objects_dict : dict
@@ -780,19 +813,52 @@ class CompetitionInterface(Node):
 
             object_pose = Pose()
             
-            object_pose.position.x = objects_dict[key]["position"][0]
-            object_pose.position.y = objects_dict[key]["position"][1]
-            object_pose.position.z = objects_dict[key]["position"][2]
+            object_pose.position.x = float(objects_dict[key]["position"][0])
+            object_pose.position.y = float(objects_dict[key]["position"][1])
+            object_pose.position.z = float(objects_dict[key]["position"][2])
             
-            object_pose.orientation.x = objects_dict[key]["orientation"][0]
-            object_pose.orientation.y = objects_dict[key]["orientation"][1]
-            object_pose.orientation.z = objects_dict[key]["orientation"][2]
-            object_pose.orientation.w = objects_dict[key]["orientation"][3]
+            object_pose.orientation.x = float(objects_dict[key]["orientation"][0])
+            object_pose.orientation.y = float(objects_dict[key]["orientation"][1])
+            object_pose.orientation.z = float(objects_dict[key]["orientation"][2])
+            object_pose.orientation.w = float(objects_dict[key]["orientation"][3])
 
             self._add_model_to_planning_scene(key, objects_dict[key]["file"], object_pose)
     
-    def  floor_robot_pick_bin_part(part : PartMsg):
+    def _left_bins_camera_cb(self,msg : AdvancedLogicalCameraImageMsg):
+        self._left_bins_parts = msg.part_poses
+    
+    def _right_bins_camera_cb(self,msg : AdvancedLogicalCameraImageMsg):
+        self._right_bins_parts = msg.part_poses
+
+    def  floor_robot_pick_bin_part(self,part_to_pick : PartMsg):
+        part_pose = Pose()
+        found_part = False
+        bin_side = ""
+        
         print("HOLD")
+
+        for part in self._left_bins_parts:
+            part : PartPoseMsg
+            if (part.part.type == part_to_pick.type and part.part.color == part_to_pick.color):
+                part_pose = part.pose
+                found_part = True
+                bin_side = "left_bins"
+                break
+        
+        if not found_part:
+            for part in self._right_bins_parts:
+                part : PartPoseMsg
+                if (part.part.type == part_to_pick.type and part.part.color == part_to_pick.color):
+                    part_pose = part.pose
+                    found_part = True
+                    bin_side = "right_bins"
+                    break
+        
+        if not found_part:
+            self.get_logger().error("Unable to locate part")
+        else:
+            self.get_logger().info(f"Part found in {bin_side}")
+        self._move_floor_robot_to_pose(part_pose)
         '''
         read the camera and see if the part is found
         If the part is found, get the pose of the part and move directly above the part using:

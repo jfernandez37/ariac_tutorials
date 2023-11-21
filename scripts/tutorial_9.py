@@ -12,9 +12,14 @@ from ariac_msgs.msg import Part
 def main(args=None):
     rclpy.init(args=args)
     interface = CompetitionInterface()
+
     interface.start_competition()
-    
+    interface.wait(3)
+    interface.get_logger().info("Competition started. Adding collision objects to planning scene")
+
     part_to_pick = Part()
+    part_to_pick.type = Part.BATTERY
+    part_to_pick.color = Part.BLUE
 
     interface.add_objects_to_planning_scene()
     interface.move_floor_robot_home()
