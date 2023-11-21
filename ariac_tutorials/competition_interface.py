@@ -884,7 +884,7 @@ class CompetitionInterface(Node):
     def _floor_robot_wait_for_attach(self,timeout : float):
         start_time = time.time()
         while not self._floor_robot_gripper_state.attached:
-            self._move_floor_robot_cartesian(0.0,0.0,-0.001)
+            self._move_floor_robot_cartesian(0.0, 0.0, -0.001)
             sleep(0.2)
             if time.time()-start_time>=timeout:
                 self.get_logger().error("Unable to pick up part")
@@ -919,11 +919,11 @@ class CompetitionInterface(Node):
             self.get_logger().info(f"Part found in {bin_side}")
 
         part_rotation = rpy_from_quaternion(part_pose.orientation)[2]
-        part_orientation = quaternion_from_euler(0.0,pi,part_rotation)
+        gripper_orientation = quaternion_from_euler(0.0,pi,part_rotation)
         self._move_floor_robot_to_pose(build_pose(part_pose.position.x, part_pose.position.y,
-                                                  part_pose.position.z+0.5, part_orientation))
+                                                  part_pose.position.z+0.5, gripper_orientation))
 
-        self._move_floor_robot_cartesian(0.0,0.0,-0.5+CompetitionInterface._part_heights[part_to_pick.type]+0.005)
+        self._move_floor_robot_cartesian(0.0, 0.0, -0.5+CompetitionInterface._part_heights[part_to_pick.type]+0.005)
         self.set_floor_robot_gripper_state(True)
         self._floor_robot_wait_for_attach(5.0)
-        self._move_floor_robot_cartesian(0.0,0.0,0.458)
+        self._move_floor_robot_cartesian(0.0, 0.0, 0.458)
