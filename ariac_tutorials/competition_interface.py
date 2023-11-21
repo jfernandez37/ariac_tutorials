@@ -230,6 +230,12 @@ class CompetitionInterface(Node):
         self._left_bins_camera_pose = Pose()
         self._right_bins_camera_pose = Pose()
 
+        # Tray information
+        self._kts1_trays = []
+        self._kts2_trays = []
+        self._kts1_camera_pose = Pose()
+        self._kts2_camera_pose = Pose()
+
         # service clients
         self.get_cartesian_path_client = self.create_client(GetCartesianPath, "compute_cartesian_path")
         self.get_position_fk_client = self.create_client(GetPositionFK, "compute_fk")
@@ -243,6 +249,37 @@ class CompetitionInterface(Node):
                                                              "/ariac/sensors/right_bins_camera/image",
                                                              self._right_bins_camera_cb,
                                                              qos_profile_sensor_data)
+        self.kts1_camera_sub_ = self.create_subscription(AdvancedLogicalCameraImageMsg,
+                                                         "/ariac/sensors/kts1_camera/image",
+                                                         self._kts1_camera_cb,
+                                                         qos_profile_sensor_data)
+        self.kts2_camera_sub_ = self.create_subscription(AdvancedLogicalCameraImageMsg,
+                                                         "/ariac/sensors/kts2_camera/image",
+                                                         self._kts2_camera_cb,
+                                                         qos_profile_sensor_data)
+        
+        # AGV status subs
+        self._agv_locations = {1 : -1,
+                               2 : -1,
+                               3 : -1,
+                               4 : -1}
+        
+        self.agv1_status_sub = self.create_subscription(AGVStatusMsg,
+                                                        "/ariac/agv1_status",
+                                                        self._agv1_status_cb,
+                                                        10)
+        self.agv2_status_sub = self.create_subscription(AGVStatusMsg,
+                                                        "/ariac/agv2_status",
+                                                        self._agv2_status_cb,
+                                                        10)
+        self.agv3_status_sub = self.create_subscription(AGVStatusMsg,
+                                                        "/ariac/agv3_status",
+                                                        self._agv3_status_cb,
+                                                        10)
+        self.agv4_status_sub = self.create_subscription(AGVStatusMsg,
+                                                        "/ariac/agv4_status",
+                                                        self._agv4_status_cb,
+                                                        10)
 
 
     @property
@@ -763,6 +800,13 @@ class CompetitionInterface(Node):
         self._plan_and_execute(self._robot_moveit_py,self._floor_robot, self.get_logger(), sleep_time=0.0)
         self._robot_moveit_py_state.update()
         self._floor_robot_home_quaternion = self._robot_moveit_py_state.get_pose("floor_gripper").orientation
+    
+    def move_ceiling_robot_home(self):
+        self._ceiling_robot.set_start_state_to_current_state()
+        self._ceiling_robot.set_goal_state(configuration_name="home")
+        self._plan_and_execute(self._robot_moveit_py,self._ceiling_robot, self.get_logger(), sleep_time=0.0)
+        self._robot_moveit_py_state.update()
+        self._ceiling_robot_home_quaternion = self._robot_moveit_py_state.get_pose("ceiling_gripper").orientation
 
     def _move_floor_robot_cartesian(self, x, y, z):
         with self._planning_scene_monitor.read_write() as scene:
@@ -880,6 +924,26 @@ class CompetitionInterface(Node):
     def _right_bins_camera_cb(self,msg : AdvancedLogicalCameraImageMsg):
         self._right_bins_parts = msg.part_poses
         self._right_bins_camera_pose = msg.sensor_pose
+    
+    def _kts1_camera_cb(self, msg: AdvancedLogicalCameraImageMsg):
+        self._kts1_trays = msg.tray_poses
+        self._kts1_camera_pose = msg.sensor_pose
+
+    def _kts2_camera_cb(self, msg: AdvancedLogicalCameraImageMsg):
+        self._kts2_trays = msg.tray_poses
+        self._kts2_camera_pose = msg.sensor_pose
+    
+    def _agv1_status_cb(self, msg : AGVStatusMsg):
+        self._agv_locations[1] = msg.location
+    
+    def _agv2_status_cb(self, msg : AGVStatusMsg):
+        self._agv_locations[2] = msg.location
+    
+    def _agv3_status_cb(self, msg : AGVStatusMsg):
+        self._agv_locations[3] = msg.location
+    
+    def _agv4_status_cb(self, msg : AGVStatusMsg):
+        self._agv_locations[4] = msg.location
 
     def _floor_robot_wait_for_attach(self,timeout : float):
         start_time = time.time()
@@ -924,6 +988,95 @@ class CompetitionInterface(Node):
                                                   part_pose.position.z+0.5, part_orientation))
 
         self._move_floor_robot_cartesian(0.0,0.0,-0.5+CompetitionInterface._part_heights[part_to_pick.type]+0.005)
+        self.set_floor_robot_gripper_state(True)
+        self._floor_robot_wait_for_attach(5.0)
+        self._move_floor_robot_cartesian(0.0,0.0,0.458)
+    
+    def complete_orders(self):
+        while len(self._orders) == 0:
+            sleep(1)
+        
+        success = True
+        while True:
+            if (self._competition_state == CompetitionStateMsg.ENDED):
+                success = False
+                break
+
+            if len(self._orders) == 0:
+                if (self._competition_state == CompetitionStateMsg.ORDER_ANNOUNCEMENTS_DONE):
+                    self.get_logger().info("Waiting for orders...")
+                    while len(self._orders) == 0:
+                        sleep(1)
+                else:
+                    self.get_logger().info("Completed all orders")
+                    success = True
+                    break
+
+            current_order = copy(self._orders[0])
+            current_order : OrderMsg
+            del self._orders[0]
+            kitting_agv_num = -1
+
+            if current_order.type == OrderMsg.KITTING:
+                self.complete_kitting_order(current_order.kitting_task)
+                kitting_agv_num = current_order.kitting_task.agv_number
+            else:
+                self.get_logger().info(f"Unable to complete 
+                                       {'assembly' if current_order.type == OrderMsg.ASSEMBLY else 'combined'} 
+                                       order")
+            
+            agv_location = -1 
+            
+            while agv_location !=AGVStatusMsg.WAREHOUSE:
+                agv_location = self._agv_locations[kitting_agv_num]
+            
+            self.submit_order(current_order.id)
+        return success
+
+    def complete_kitting_order(self, kitting_task : OrderMsg.kitting_task):
+        self.move_floor_robot_home()
+
+        self._floor_robot_pick_and_place_tray(kitting_task.tray_id, kitting_task.agv_number)
+
+        for kitting_part in kitting_task.parts:
+            self.floor_robot_pick_bin_part(kitting_part.part)
+            self._floor_robot_place_part_on_kit_tray(kitting_task.agv_number, kitting_part.quadrant)
+        
+        self.move_agv_to_station(kitting_task.agv_number, kitting_task.destination)
+
+    def _floor_robot_pick_and_place_tray(self, tray_id, agv_number):
+        tray_pose = Pose
+        station = ""
+        found_tray = False
+
+        for tray in self._kts1_trays:
+            if tray.id == tray_id:
+                station = "kts1"
+                tray_pose = multiply_pose(self._kts1_camera_pose, tray.pose)
+                found_tray = True
+                break
+        
+        if not found_tray:
+            for tray in self._kts2_trays:
+                if tray.id == tray_id:
+                    station = "kts2"
+                    tray_pose = multiply_pose(self._kts2_camera_pose, tray.pose)
+                    found_tray = True
+                    break
+        
+        if not found_tray:
+            return False
+        
+        tray_rotation = rpy_from_quaternion(tray_pose.orientation)[2]
+
+        if self._floor_robot_gripper_state.type != "tray_gripper":
+            self._floor_robot_change_gripper(station, "trays")
+        
+        tray_orientation = quaternion_from_euler(0.0,pi,tray_rotation)
+        self._move_floor_robot_to_pose(build_pose(tray_pose.position.x, tray_pose.position.y,
+                                                  tray_pose.position.z+0.5, tray_orientation))
+        
+        self._move_floor_robot_cartesian(0.0,0.0,-0.5+0.015)
         self.set_floor_robot_gripper_state(True)
         self._floor_robot_wait_for_attach(5.0)
         self._move_floor_robot_cartesian(0.0,0.0,0.458)
