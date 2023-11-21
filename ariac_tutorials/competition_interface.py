@@ -213,16 +213,16 @@ class CompetitionInterface(Node):
         self._floor_robot_gripper_state = VacuumGripperState()
 
         # Moveit_py variables
-        self._robot_moveit_py = MoveItPy(node_name="ariac_tutorials")
-        self._robot_moveit_py_state = RobotState(self._robot_moveit_py.get_robot_model())
+        self._ariac_robots = MoveItPy(node_name="ariac_robots_moveit_py")
+        self._ariac_robots_state = RobotState(self._ariac_robots.get_robot_model())
 
-        self._floor_robot = self._robot_moveit_py.get_planning_component("floor_robot")
-        self._ceiling_robot = self._robot_moveit_py.get_planning_component("ceiling_robot")
+        self._floor_robot = self._ariac_robots.get_planning_component("floor_robot")
+        self._ceiling_robot = self._ariac_robots.get_planning_component("ceiling_robot")
 
         self._floor_robot_home_quaternion = Quaternion()
         self._ceiling_robot_home_quaternion = Quaternion()
 
-        self._planning_scene_monitor = self._robot_moveit_py.get_planning_scene_monitor()
+        self._planning_scene_monitor = self._ariac_robots.get_planning_scene_monitor()
 
         # Parts found in the bins
         self._left_bins_parts = []
@@ -668,7 +668,7 @@ class CompetitionInterface(Node):
 
         self.get_logger().info("Getting cartesian path")
         
-        self._robot_moveit_py_state.update()
+        self._ariac_robots_state.update()
 
         request = GetCartesianPath.Request()
 
@@ -677,7 +677,7 @@ class CompetitionInterface(Node):
         header.stamp = self.get_clock().now().to_msg()
 
         request.header = header
-        request.start_state = robotStateToRobotStateMsg(self._robot_moveit_py_state)
+        request.start_state = robotStateToRobotStateMsg(self._ariac_robots_state)
         request.group_name = "floor_robot"
         request.link_name = "floor_gripper"
         request.waypoints = waypoints
@@ -708,8 +708,8 @@ class CompetitionInterface(Node):
         request.header = header
 
         request.fk_link_names = ["floor_gripper"]
-        self._robot_moveit_py_state.update()
-        request.robot_state = robotStateToRobotStateMsg(self._robot_moveit_py_state)
+        self._ariac_robots_state.update()
+        request.robot_state = robotStateToRobotStateMsg(self._ariac_robots_state)
 
         future = self.get_position_fk_client.call_async(request)
 
@@ -760,15 +760,15 @@ class CompetitionInterface(Node):
     def move_floor_robot_home(self):
         self._floor_robot.set_start_state_to_current_state()
         self._floor_robot.set_goal_state(configuration_name="home")
-        self._plan_and_execute(self._robot_moveit_py,self._floor_robot, self.get_logger(), sleep_time=0.0)
-        self._robot_moveit_py_state.update()
-        self._floor_robot_home_quaternion = self._robot_moveit_py_state.get_pose("floor_gripper").orientation
+        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger(), sleep_time=0.0)
+        self._ariac_robots_state.update()
+        self._floor_robot_home_quaternion = self._ariac_robots_state.get_pose("floor_gripper").orientation
 
     def _move_floor_robot_cartesian(self, x, y, z):
         with self._planning_scene_monitor.read_write() as scene:
             # instantiate a RobotState instance using the current robot model
-            self._robot_moveit_py_state = scene.current_state
-            self._robot_moveit_py_state.update()
+            self._ariac_robots_state = scene.current_state
+            self._ariac_robots_state.update()
 
             fk_posestamped = self._call_get_position_fk()
 
@@ -782,16 +782,16 @@ class CompetitionInterface(Node):
 
             # Max step
             max_step = 0.1
-            self._robot_moveit_py_state.update()
+            self._ariac_robots_state.update()
             trajectory_msg = self._call_get_cartesian_path(
                                         waypoints,
                                         max_step)
-            self._robot_moveit_py_state.update()
-            trajectory = RobotTrajectory(self._robot_moveit_py.get_robot_model())
-            trajectory.set_robot_trajectory_msg(self._robot_moveit_py_state, trajectory_msg)
+            self._ariac_robots_state.update()
+            trajectory = RobotTrajectory(self._ariac_robots.get_robot_model())
+            trajectory.set_robot_trajectory_msg(self._ariac_robots_state, trajectory_msg)
             trajectory.joint_model_group_name = "floor_robot"
-        self._robot_moveit_py_state.update(True)
-        self._robot_moveit_py.execute(trajectory, controllers=[])
+        self._ariac_robots_state.update(True)
+        self._ariac_robots.execute(trajectory, controllers=[])
 
     def _move_floor_robot_to_pose(self,pose : Pose):
         self.get_logger().info(str(pose))
@@ -804,7 +804,7 @@ class CompetitionInterface(Node):
             self.get_logger().info(str(pose_goal.pose))
             self._floor_robot.set_goal_state(pose_stamped_msg=pose_goal, pose_link="floor_gripper")
         
-        self._plan_and_execute(self._robot_moveit_py, self._floor_robot, self.get_logger())
+        self._plan_and_execute(self._ariac_robots, self._floor_robot, self.get_logger())
 
     def _makeMesh(self, name, pose, filename) -> CollisionObject:
         with pyassimp.load(filename) as scene:
