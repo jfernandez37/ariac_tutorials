@@ -1,4 +1,8 @@
 from time import sleep
+from math import pi
+from copy import copy
+import time
+from sympy import Quaternion
 from ament_index_python import get_package_share_directory
 from moveit import MoveItPy, PlanningSceneMonitor
 import rclpy
@@ -14,6 +18,7 @@ from shape_msgs.msg import Mesh, MeshTriangle
 from moveit_msgs.msg import CollisionObject
 from std_msgs.msg import Header
 
+from moveit.core.robot_trajectory import RobotTrajectory
 from moveit.core.robot_state import RobotState, robotStateToRobotStateMsg
 from moveit_msgs.srv import GetCartesianPath, GetPositionFK
 
@@ -41,6 +46,8 @@ from ariac_tutorials.utils import (
     multiply_pose,
     rpy_from_quaternion,
     rad_to_deg_str,
+    quaternion_from_euler,
+    build_pose,
     AdvancedLogicalCameraImage,
     Order,
     KittingTask,
@@ -124,6 +131,12 @@ class CompetitionInterface(Node):
     }
     '''Dictionary for converting VacuumGripperState constants to strings'''
 
+    _part_heights = {PartMsg.BATTERY : 0.04,
+                     PartMsg.PUMP : 0.12,
+                     PartMsg.REGULATOR : 0.07,
+                     PartMsg.SENSOR : 0.07}
+    '''Dictionary for the heights of each part'''
+
     def __init__(self):
         super().__init__('competition_interface')
 
@@ -206,13 +219,22 @@ class CompetitionInterface(Node):
         self._floor_robot = self._robot_moveit_py.get_planning_component("floor_robot")
         self._ceiling_robot = self._robot_moveit_py.get_planning_component("ceiling_robot")
 
+        self._floor_robot_home_quaternion = Quaternion()
+        self._ceiling_robot_home_quaternion = Quaternion()
+
         self._planning_scene_monitor = self._robot_moveit_py.get_planning_scene_monitor()
 
         # Parts found in the bins
         self._left_bins_parts = []
         self._right_bins_parts = []
+        self._left_bins_camera_pose = Pose()
+        self._right_bins_camera_pose = Pose()
 
-        # Left bins camera sub
+        # service clients
+        self.get_cartesian_path_client = self.create_client(GetCartesianPath, "compute_cartesian_path")
+        self.get_position_fk_client = self.create_client(GetPositionFK, "compute_fk")
+
+        # Camera subs
         self.left_bins_camera_sub = self.create_subscription(AdvancedLogicalCameraImageMsg,
                                                              "/ariac/sensors/left_bins_camera/image",
                                                              self._left_bins_camera_cb,
@@ -645,6 +667,8 @@ class CompetitionInterface(Node):
                                  max_step : float):
 
         self.get_logger().info("Getting cartesian path")
+        
+        self._robot_moveit_py_state.update()
 
         request = GetCartesianPath.Request()
 
@@ -653,7 +677,7 @@ class CompetitionInterface(Node):
         header.stamp = self.get_clock().now().to_msg()
 
         request.header = header
-        request.start_state = robotStateToRobotStateMsg(self._robot_moveit_py_state.update())
+        request.start_state = robotStateToRobotStateMsg(self._robot_moveit_py_state)
         request.group_name = "floor_robot"
         request.link_name = "floor_gripper"
         request.waypoints = waypoints
@@ -684,8 +708,8 @@ class CompetitionInterface(Node):
         request.header = header
 
         request.fk_link_names = ["floor_gripper"]
-
-        request.robot_state = robotStateToRobotStateMsg(self._robot_moveit_py_state.update())
+        self._robot_moveit_py_state.update()
+        request.robot_state = robotStateToRobotStateMsg(self._robot_moveit_py_state)
 
         future = self.get_position_fk_client.call_async(request)
 
@@ -737,6 +761,37 @@ class CompetitionInterface(Node):
         self._floor_robot.set_start_state_to_current_state()
         self._floor_robot.set_goal_state(configuration_name="home")
         self._plan_and_execute(self._robot_moveit_py,self._floor_robot, self.get_logger(), sleep_time=0.0)
+        self._robot_moveit_py_state.update()
+        self._floor_robot_home_quaternion = self._robot_moveit_py_state.get_pose("floor_gripper").orientation
+
+    def _move_floor_robot_cartesian(self, x, y, z):
+        with self._planning_scene_monitor.read_write() as scene:
+            # instantiate a RobotState instance using the current robot model
+            self._robot_moveit_py_state = scene.current_state
+            self._robot_moveit_py_state.update()
+
+            fk_posestamped = self._call_get_position_fk()
+
+            #Waypoints
+            current_pose = fk_posestamped[-1].pose
+            desired_pose = copy(current_pose)
+            desired_pose.position.x+=float(x)
+            desired_pose.position.y+=float(y)
+            desired_pose.position.z+=float(z)
+            waypoints = [desired_pose]
+
+            # Max step
+            max_step = 0.1
+            self._robot_moveit_py_state.update()
+            trajectory_msg = self._call_get_cartesian_path(
+                                        waypoints,
+                                        max_step)
+            self._robot_moveit_py_state.update()
+            trajectory = RobotTrajectory(self._robot_moveit_py.get_robot_model())
+            trajectory.set_robot_trajectory_msg(self._robot_moveit_py_state, trajectory_msg)
+            trajectory.joint_model_group_name = "floor_robot"
+        self._robot_moveit_py_state.update(True)
+        self._robot_moveit_py.execute(trajectory, controllers=[])
 
     def _move_floor_robot_to_pose(self,pose : Pose):
         self.get_logger().info(str(pose))
@@ -744,14 +799,8 @@ class CompetitionInterface(Node):
             self._floor_robot.set_start_state_to_current_state()
 
             pose_goal = PoseStamped()
-            pose_goal.header.frame_id = "floor_base_link_inertia"
-            pose_goal.pose.position.x = float(round(pose.position.x, 2))
-            pose_goal.pose.position.y = float(round(pose.position.y, 2))+0.2
-            pose_goal.pose.position.z = float(round(pose.position.z, 2))
-            pose_goal.pose.orientation.x = 0.0
-            pose_goal.pose.orientation.y = 0.0
-            pose_goal.pose.orientation.z = 0.0
-            pose_goal.pose.orientation.w = 1.0
+            pose_goal.header.frame_id = "world"
+            pose_goal.pose = pose
             self.get_logger().info(str(pose_goal.pose))
             self._floor_robot.set_goal_state(pose_stamped_msg=pose_goal, pose_link="floor_gripper")
         
@@ -826,9 +875,19 @@ class CompetitionInterface(Node):
     
     def _left_bins_camera_cb(self,msg : AdvancedLogicalCameraImageMsg):
         self._left_bins_parts = msg.part_poses
+        self._left_bins_camera_pose = msg.sensor_pose
     
     def _right_bins_camera_cb(self,msg : AdvancedLogicalCameraImageMsg):
         self._right_bins_parts = msg.part_poses
+        self._right_bins_camera_pose = msg.sensor_pose
+
+    def _floor_robot_wait_for_attach(self,timeout : float):
+        start_time = time.time()
+        while not self._floor_robot_gripper_state.attached:
+            self._move_floor_robot_cartesian(0.0,0.0,-0.001)
+            sleep(0.2)
+            if time.time()-start_time>=timeout:
+                self.get_logger().error("Unable to pick up part")
 
     def  floor_robot_pick_bin_part(self,part_to_pick : PartMsg):
         part_pose = Pose()
@@ -840,7 +899,7 @@ class CompetitionInterface(Node):
         for part in self._left_bins_parts:
             part : PartPoseMsg
             if (part.part.type == part_to_pick.type and part.part.color == part_to_pick.color):
-                part_pose = part.pose
+                part_pose = multiply_pose(self._left_bins_camera_pose,part.pose)
                 found_part = True
                 bin_side = "left_bins"
                 break
@@ -849,7 +908,7 @@ class CompetitionInterface(Node):
             for part in self._right_bins_parts:
                 part : PartPoseMsg
                 if (part.part.type == part_to_pick.type and part.part.color == part_to_pick.color):
-                    part_pose = part.pose
+                    part_pose = multiply_pose(self._right_bins_camera_pose,part.pose)
                     found_part = True
                     bin_side = "right_bins"
                     break
@@ -858,29 +917,13 @@ class CompetitionInterface(Node):
             self.get_logger().error("Unable to locate part")
         else:
             self.get_logger().info(f"Part found in {bin_side}")
-        self._move_floor_robot_to_pose(part_pose)
-        '''
-        read the camera and see if the part is found
-        If the part is found, get the pose of the part and move directly above the part using:
-        
-        self._move_to_cartesian_pose(part_pose)
 
-        
-        
-        Then use use the cartesian path service to move down to the part
-        
-        robot_trajectory = self._call_get_cartesian_path_service_floor_robot(waypoints, max_step)
-        self._robot_moveit_py.execute(robot_trajectory, controllers=[])
+        part_rotation = rpy_from_quaternion(part_pose.orientation)[2]
+        part_orientation = quaternion_from_euler(0.0,pi,part_rotation)
+        self._move_floor_robot_to_pose(build_pose(part_pose.position.x, part_pose.position.y,
+                                                  part_pose.position.z+0.5, part_orientation))
 
-        
-        
-        Then attempt to pick up the parts
-        
-        FloorRobotSetGripperState(true);
-        FloorRobotWaitForAttach(3.0);
-        
-
-        Move the robot up
-
-        robot_trajectory = self._call_get_cartesian_path_service_floor_robot(waypoints, max_step)
-        '''
+        self._move_floor_robot_cartesian(0.0,0.0,-0.5+CompetitionInterface._part_heights[part_to_pick.type]+0.005)
+        self.set_floor_robot_gripper_state(True)
+        self._floor_robot_wait_for_attach(5.0)
+        self._move_floor_robot_cartesian(0.0,0.0,0.458)

@@ -66,6 +66,36 @@ def rpy_from_quaternion(q: Quaternion) -> Tuple[float, float, float]:
     R = PyKDL.Rotation.Quaternion(q.x, q.y, q.z, q.w)
     return R.GetRPY()
 
+def quaternion_from_euler(roll: float, pitch: float, yaw: float) -> Quaternion:
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+
+    q = [0] * 4
+    q[0] = cy * cp * cr + sy * sp * sr
+    q[1] = cy * cp * sr - sy * sp * cr
+    q[2] = sy * cp * sr + cy * sp * cr
+    q[3] = sy * cp * cr - cy * sp * sr
+
+    q_msg = Quaternion()
+    q_msg.w = q[0]
+    q_msg.x = q[1]
+    q_msg.y = q[2]
+    q_msg.z = q[3]
+
+    return q_msg
+
+def build_pose(x,y,z,q : Quaternion)->Pose:
+    p = Pose()
+    p.position.x = x
+    p.position.y = y
+    p.position.z = z
+    p.orientation = q
+    return p
+
 
 def rad_to_deg_str(radians: float) -> str:
     '''
