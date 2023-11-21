@@ -764,21 +764,13 @@ class CompetitionInterface(Node):
         self._ariac_robots_state.update()
         self._floor_robot_home_quaternion = self._ariac_robots_state.get_pose("floor_gripper").orientation
 
-    def _move_floor_robot_cartesian(self, x, y, z):
+    def _move_floor_robot_cartesian(self, waypoints):
         with self._planning_scene_monitor.read_write() as scene:
             # instantiate a RobotState instance using the current robot model
             self._ariac_robots_state = scene.current_state
             self._ariac_robots_state.update()
 
             fk_posestamped = self._call_get_position_fk()
-
-            #Waypoints
-            current_pose = fk_posestamped[-1].pose
-            desired_pose = copy(current_pose)
-            desired_pose.position.x+=float(x)
-            desired_pose.position.y+=float(y)
-            desired_pose.position.z+=float(z)
-            waypoints = [desired_pose]
 
             # Max step
             max_step = 0.1
@@ -923,7 +915,16 @@ class CompetitionInterface(Node):
         self._move_floor_robot_to_pose(build_pose(part_pose.position.x, part_pose.position.y,
                                                   part_pose.position.z+0.5, gripper_orientation))
 
-        self._move_floor_robot_cartesian(0.0, 0.0, -0.5+CompetitionInterface._part_heights[part_to_pick.type]+0.005)
+        waypoints = []
+        waypoints.append(build_pose(part_pose.position.x, part_pose.position.y,
+                                    part_pose.position.z+CompetitionInterface._part_heights[part_to_pick.type]+0.005,
+                                    gripper_orientation))
+        self._move_floor_robot_cartesian(waypoints)
         self.set_floor_robot_gripper_state(True)
         self._floor_robot_wait_for_attach(5.0)
-        self._move_floor_robot_cartesian(0.0, 0.0, 0.458)
+
+        waypoints = []
+        waypoints.append(build_pose(part_pose.position.x, part_pose.position.y,
+                                    part_pose.position.z+0.5,
+                                    gripper_orientation))
+        self._move_floor_robot_cartesian(waypoints)
