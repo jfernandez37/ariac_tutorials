@@ -773,11 +773,8 @@ class CompetitionInterface(Node):
             fk_posestamped = self._call_get_position_fk()
 
             # Max step
-            max_step = 0.1
             self._ariac_robots_state.update()
-            trajectory_msg = self._call_get_cartesian_path(
-                                        waypoints,
-                                        max_step)
+            trajectory_msg = self._call_get_cartesian_path(waypoints)
             self._ariac_robots_state.update()
             trajectory = RobotTrajectory(self._ariac_robots.get_robot_model())
             trajectory.set_robot_trajectory_msg(self._ariac_robots_state, trajectory_msg)
