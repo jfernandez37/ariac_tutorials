@@ -961,8 +961,8 @@ class CompetitionInterface(Node):
         start_time = time.time()
         while not self._floor_robot_gripper_state.attached:
             current_pose = self._call_get_position_fk()[0].pose
-            waypoints = [build_pose(current_pose.x, current_pose.y,
-                                    current_pose.z-0.001,
+            waypoints = [build_pose(current_pose.position.x, current_pose.position.y,
+                                    current_pose.position.z-0.001,
                                     orientation)]
             self._move_floor_robot_cartesian(waypoints)
             sleep(0.2)
@@ -999,7 +999,7 @@ class CompetitionInterface(Node):
             self.get_logger().info(f"Part found in {bin_side}")
 
         part_rotation = rpy_from_quaternion(part_pose.orientation)[2]
-        if self._floor_robot_gripper_state.tyep != "part_gripper":
+        if self._floor_robot_gripper_state.type != "part_gripper":
             if part_pose.position.y<0:
                 station = "kts1"
             else: 
@@ -1009,15 +1009,15 @@ class CompetitionInterface(Node):
         self._move_floor_robot_to_pose(build_pose(part_pose.position.x, part_pose.position.y,
                                                   part_pose.position.z+0.5, gripper_orientation))
 
-        waypoints = [build_pose(part_pose.x, part_pose.y,
-                                part_pose.z+CompetitionInterface._part_heights[part_to_pick.type]+0.005,
+        waypoints = [build_pose(part_pose.position.x, part_pose.position.y,
+                                part_pose.position.z+CompetitionInterface._part_heights[part_to_pick.type]+0.005,
                                 gripper_orientation)]
         self._move_floor_robot_cartesian(waypoints)
         self.set_floor_robot_gripper_state(True)
         self._floor_robot_wait_for_attach(5.0, gripper_orientation)
         self.floor_robot_attached_part_ = part_to_pick
-        waypoints = [build_pose(part_pose.x, part_pose.y,
-                                part_pose.z+0.5,
+        waypoints = [build_pose(part_pose.position.x, part_pose.position.y,
+                                part_pose.position.z+0.5,
                                 gripper_orientation)]
         self._move_floor_robot_cartesian(waypoints)
     
@@ -1050,9 +1050,7 @@ class CompetitionInterface(Node):
                 self.complete_kitting_order(current_order.kitting_task)
                 kitting_agv_num = current_order.kitting_task.agv_number
             else:
-                self.get_logger().info(f"Unable to complete 
-                                       {'assembly' if current_order.type == OrderMsg.ASSEMBLY else 'combined'} 
-                                       order")
+                self.get_logger().info(f"Unable to complete {'assembly' if current_order.type == OrderMsg.ASSEMBLY else 'combined'} order")
             
             agv_location = -1 
             
