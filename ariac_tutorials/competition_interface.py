@@ -37,7 +37,8 @@ from ariac_msgs.msg import (
 
 from ariac_msgs.srv import (
     MoveAGV,
-    VacuumGripperControl
+    VacuumGripperControl,
+    ChangeGripper
 )
 
 from std_srvs.srv import Trigger
@@ -55,6 +56,11 @@ from ariac_tutorials.utils import (
     AssemblyTask,
     KittingPart
 )
+
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
 
 class Error(Exception):
@@ -137,6 +143,11 @@ class CompetitionInterface(Node):
                      PartMsg.SENSOR : 0.07}
     '''Dictionary for the heights of each part'''
 
+    _quad_offsets = {1 : (-0.08, 0.12),
+                     2 : (0.08, 0.12),
+                     3 : (-0.08, -0.12),
+                     4 : (0.08, -0.12)}
+
     def __init__(self):
         super().__init__('competition_interface')
 
@@ -213,16 +224,16 @@ class CompetitionInterface(Node):
         self._floor_robot_gripper_state = VacuumGripperState()
 
         # Moveit_py variables
-        self._robot_moveit_py = MoveItPy(node_name="ariac_tutorials")
-        self._robot_moveit_py_state = RobotState(self._robot_moveit_py.get_robot_model())
+        self._ariac_robots = MoveItPy(node_name="ariac_robots_moveit_py")
+        self._ariac_robots_state = RobotState(self._ariac_robots.get_robot_model())
 
-        self._floor_robot = self._robot_moveit_py.get_planning_component("floor_robot")
-        self._ceiling_robot = self._robot_moveit_py.get_planning_component("ceiling_robot")
+        self._floor_robot = self._ariac_robots.get_planning_component("floor_robot")
+        self._ceiling_robot = self._ariac_robots.get_planning_component("ceiling_robot")
 
         self._floor_robot_home_quaternion = Quaternion()
         self._ceiling_robot_home_quaternion = Quaternion()
 
-        self._planning_scene_monitor = self._robot_moveit_py.get_planning_scene_monitor()
+        self._planning_scene_monitor = self._ariac_robots.get_planning_scene_monitor()
 
         # Parts found in the bins
         self._left_bins_parts = []
@@ -280,6 +291,17 @@ class CompetitionInterface(Node):
                                                         "/ariac/agv4_status",
                                                         self._agv4_status_cb,
                                                         10)
+        
+        # TF
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        self.tf_broadcaster = StaticTransformBroadcaster(self)
+        self.static_transforms = []
+
+        self.floor_robot_attached_part_ = PartMsg()
+
+        self._change_gripper_client = self.create_client(ChangeGripper, "/ariac/floor_robot_change_gripper")
 
 
     @property
@@ -705,7 +727,7 @@ class CompetitionInterface(Node):
 
         self.get_logger().info("Getting cartesian path")
         
-        self._robot_moveit_py_state.update()
+        self._ariac_robots_state.update()
 
         request = GetCartesianPath.Request()
 
@@ -714,7 +736,7 @@ class CompetitionInterface(Node):
         header.stamp = self.get_clock().now().to_msg()
 
         request.header = header
-        request.start_state = robotStateToRobotStateMsg(self._robot_moveit_py_state)
+        request.start_state = robotStateToRobotStateMsg(self._ariac_robots_state)
         request.group_name = "floor_robot"
         request.link_name = "floor_gripper"
         request.waypoints = waypoints
@@ -745,8 +767,8 @@ class CompetitionInterface(Node):
         request.header = header
 
         request.fk_link_names = ["floor_gripper"]
-        self._robot_moveit_py_state.update()
-        request.robot_state = robotStateToRobotStateMsg(self._robot_moveit_py_state)
+        self._ariac_robots_state.update()
+        request.robot_state = robotStateToRobotStateMsg(self._ariac_robots_state)
 
         future = self.get_position_fk_client.call_async(request)
 
@@ -754,7 +776,7 @@ class CompetitionInterface(Node):
         rclpy.spin_until_future_complete(self, future, timeout_sec=10)
 
         if not future.done():
-            raise Error("Timeout reached when calling move_cartesian service")
+            raise Error("Timeout reached when calling get_position_fk service")
 
         result: GetPositionFK.Response
         result = future.result()
@@ -797,45 +819,35 @@ class CompetitionInterface(Node):
     def move_floor_robot_home(self):
         self._floor_robot.set_start_state_to_current_state()
         self._floor_robot.set_goal_state(configuration_name="home")
-        self._plan_and_execute(self._robot_moveit_py,self._floor_robot, self.get_logger(), sleep_time=0.0)
-        self._robot_moveit_py_state.update()
-        self._floor_robot_home_quaternion = self._robot_moveit_py_state.get_pose("floor_gripper").orientation
+        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger(), sleep_time=0.0)
+        self._ariac_robots_state.update()
+        self._floor_robot_home_quaternion = self._ariac_robots_state.get_pose("floor_gripper").orientation
     
     def move_ceiling_robot_home(self):
         self._ceiling_robot.set_start_state_to_current_state()
         self._ceiling_robot.set_goal_state(configuration_name="home")
-        self._plan_and_execute(self._robot_moveit_py,self._ceiling_robot, self.get_logger(), sleep_time=0.0)
-        self._robot_moveit_py_state.update()
-        self._ceiling_robot_home_quaternion = self._robot_moveit_py_state.get_pose("ceiling_gripper").orientation
+        self._plan_and_execute(self._ariac_robots,self._ceiling_robot, self.get_logger(), sleep_time=0.0)
+        self._ariac_robots_state.update()
+        self._ceiling_robot_home_quaternion = self._ariac_robots_state.get_pose("ceiling_gripper").orientation
 
-    def _move_floor_robot_cartesian(self, x, y, z):
+    def _move_floor_robot_cartesian(self, waypoints):
         with self._planning_scene_monitor.read_write() as scene:
             # instantiate a RobotState instance using the current robot model
-            self._robot_moveit_py_state = scene.current_state
-            self._robot_moveit_py_state.update()
-
-            fk_posestamped = self._call_get_position_fk()
-
-            #Waypoints
-            current_pose = fk_posestamped[-1].pose
-            desired_pose = copy(current_pose)
-            desired_pose.position.x+=float(x)
-            desired_pose.position.y+=float(y)
-            desired_pose.position.z+=float(z)
-            waypoints = [desired_pose]
+            self._ariac_robots_state = scene.current_state
+            self._ariac_robots_state.update()
 
             # Max step
             max_step = 0.1
-            self._robot_moveit_py_state.update()
+            self._ariac_robots_state.update()
             trajectory_msg = self._call_get_cartesian_path(
                                         waypoints,
                                         max_step)
-            self._robot_moveit_py_state.update()
-            trajectory = RobotTrajectory(self._robot_moveit_py.get_robot_model())
-            trajectory.set_robot_trajectory_msg(self._robot_moveit_py_state, trajectory_msg)
+            self._ariac_robots_state.update()
+            trajectory = RobotTrajectory(self._ariac_robots.get_robot_model())
+            trajectory.set_robot_trajectory_msg(self._ariac_robots_state, trajectory_msg)
             trajectory.joint_model_group_name = "floor_robot"
-        self._robot_moveit_py_state.update(True)
-        self._robot_moveit_py.execute(trajectory, controllers=[])
+        self._ariac_robots_state.update(True)
+        self._ariac_robots.execute(trajectory, controllers=[])
 
     def _move_floor_robot_to_pose(self,pose : Pose):
         self.get_logger().info(str(pose))
@@ -848,7 +860,7 @@ class CompetitionInterface(Node):
             self.get_logger().info(str(pose_goal.pose))
             self._floor_robot.set_goal_state(pose_stamped_msg=pose_goal, pose_link="floor_gripper")
         
-        self._plan_and_execute(self._robot_moveit_py, self._floor_robot, self.get_logger())
+        self._plan_and_execute(self._ariac_robots, self._floor_robot, self.get_logger())
 
     def _makeMesh(self, name, pose, filename) -> CollisionObject:
         with pyassimp.load(filename) as scene:
@@ -945,10 +957,14 @@ class CompetitionInterface(Node):
     def _agv4_status_cb(self, msg : AGVStatusMsg):
         self._agv_locations[4] = msg.location
 
-    def _floor_robot_wait_for_attach(self,timeout : float):
+    def _floor_robot_wait_for_attach(self,timeout : float, orientation : Quaternion):
         start_time = time.time()
         while not self._floor_robot_gripper_state.attached:
-            self._move_floor_robot_cartesian(0.0,0.0,-0.001)
+            current_pose = self._call_get_position_fk()[0].pose
+            waypoints = [build_pose(current_pose.x, current_pose.y,
+                                    current_pose.z-0.001,
+                                    orientation)]
+            self._move_floor_robot_cartesian(waypoints)
             sleep(0.2)
             if time.time()-start_time>=timeout:
                 self.get_logger().error("Unable to pick up part")
@@ -983,14 +999,27 @@ class CompetitionInterface(Node):
             self.get_logger().info(f"Part found in {bin_side}")
 
         part_rotation = rpy_from_quaternion(part_pose.orientation)[2]
-        part_orientation = quaternion_from_euler(0.0,pi,part_rotation)
+        if self._floor_robot_gripper_state.tyep != "part_gripper":
+            if part_pose.position.y<0:
+                station = "kts1"
+            else: 
+                station = "kts2"
+            self._floor_robot_change_gripper(station, "parts")
+        gripper_orientation = quaternion_from_euler(0.0,pi,part_rotation)
         self._move_floor_robot_to_pose(build_pose(part_pose.position.x, part_pose.position.y,
-                                                  part_pose.position.z+0.5, part_orientation))
+                                                  part_pose.position.z+0.5, gripper_orientation))
 
-        self._move_floor_robot_cartesian(0.0,0.0,-0.5+CompetitionInterface._part_heights[part_to_pick.type]+0.005)
+        waypoints = [build_pose(part_pose.x, part_pose.y,
+                                part_pose.z+CompetitionInterface._part_heights[part_to_pick.type]+0.005,
+                                gripper_orientation)]
+        self._move_floor_robot_cartesian(waypoints)
         self.set_floor_robot_gripper_state(True)
-        self._floor_robot_wait_for_attach(5.0)
-        self._move_floor_robot_cartesian(0.0,0.0,0.458)
+        self._floor_robot_wait_for_attach(5.0, gripper_orientation)
+        self.floor_robot_attached_part_ = part_to_pick
+        waypoints = [build_pose(part_pose.x, part_pose.y,
+                                part_pose.z+0.5,
+                                gripper_orientation)]
+        self._move_floor_robot_cartesian(waypoints)
     
     def complete_orders(self):
         while len(self._orders) == 0:
@@ -1072,11 +1101,102 @@ class CompetitionInterface(Node):
         if self._floor_robot_gripper_state.type != "tray_gripper":
             self._floor_robot_change_gripper(station, "trays")
         
-        tray_orientation = quaternion_from_euler(0.0,pi,tray_rotation)
+        gripper_orientation = quaternion_from_euler(0.0,pi,tray_rotation)
         self._move_floor_robot_to_pose(build_pose(tray_pose.position.x, tray_pose.position.y,
-                                                  tray_pose.position.z+0.5, tray_orientation))
+                                                  tray_pose.position.z+0.5, gripper_orientation))
         
-        self._move_floor_robot_cartesian(0.0,0.0,-0.5+0.015)
+        waypoints = [build_pose(tray_pose.x, tray_pose.y,
+                                tray_pose.z+0.015,
+                                gripper_orientation)]
+        self._move_floor_robot_cartesian(tray_pose)
         self.set_floor_robot_gripper_state(True)
-        self._floor_robot_wait_for_attach(5.0)
-        self._move_floor_robot_cartesian(0.0,0.0,0.458)
+        self._floor_robot_wait_for_attach(5.0, gripper_orientation)
+        waypoints = [build_pose(tray_pose.x, tray_pose.y,
+                                tray_pose.z+0.5,
+                                gripper_orientation)]
+        self._move_floor_robot_cartesian(waypoints)
+    
+    def _frame_world_pose(self,frame_id : str):
+        try:
+            t = self.tf_buffer.lookup_transform("world",frame_id,0)
+        except:
+            self.get_logger().error("Could not get transform")
+        
+        pose = Pose()
+        pose.position.x = t.transform.translation.x
+        pose.position.y = t.transform.translation.y
+        pose.position.z = t.transform.translation.z
+        pose.orientation = t.transform.rotation
+
+        return pose
+        
+    def _floor_robot_place_part_on_kit_tray(self, agv_num : int, quadrant : int):
+        
+        if not self._floor_robot_gripper_state.attached:
+            self.get_logger().error("No part attached")
+            return False
+        
+        agv_tray_pose = self._frame_world_pose(f"agv{agv_num}_tray")
+
+        part_drop_offset = build_pose(CompetitionInterface._quad_offsets[quadrant][0],
+                                      CompetitionInterface._quad_offsets[quadrant][1],
+                                      0.0, Quaternion())
+        
+        part_drop_pose = multiply_pose(agv_tray_pose, part_drop_offset)
+
+        self._move_floor_robot_to_pose(build_pose(part_drop_pose.x, part_drop_pose.y,
+                                                  part_drop_pose.z+0.3, quaternion_from_euler(0.0, pi, 0.0)))
+        
+        waypoints = [build_pose(part_drop_pose.x, part_drop_pose.y,
+                                part_drop_pose.z+CompetitionInterface._part_heights[self.floor_robot_attached_part_.type]+0.002, 
+                                quaternion_from_euler(0.0, pi, 0.0))]
+        
+        self._move_floor_robot_cartesian(waypoints)
+
+        self.set_floor_robot_gripper_state(False)
+
+        waypoints = [build_pose(part_drop_pose.x, part_drop_pose.y,
+                                part_drop_pose.z+0.3, 
+                                quaternion_from_euler(0.0, pi, 0.0))]
+        
+        self._move_floor_robot_cartesian(waypoints)
+
+        return True
+
+    def _floor_robot_change_gripper(self,station : str, gripper_type : str):
+        tc_pose = self._frame_world_pose(f"{station}_tool_changer_{gripper_type}_frame")
+
+        self._move_floor_robot_to_pose(build_pose(tc_pose.position.x, tc_pose.position.y,
+                                                  tc_pose.position.z+0.4,
+                                                  quaternion_from_euler(0.0, pi, 0.0)))
+        
+        waypoints = [build_pose(tc_pose.position.x, tc_pose.position.y,tc_pose.position.z,
+                                quaternion_from_euler(0.0,pi,0.0))]
+        
+        self._move_floor_robot_cartesian(waypoints)
+
+        request = ChangeGripper.Request()
+
+        if gripper_type == "trays":
+            request.gripper_type = ChangeGripper.Request.TRAY_GRIPPER
+        elif gripper_type == "parts":
+            request.gripper_type = ChangeGripper.Request.PART_GRIPPER
+        
+        future = self._change_gripper_client.call_async(request)
+
+
+        rclpy.spin_until_future_complete(self, future, timeout_sec=10)
+
+        if not future.done():
+            raise Error("Timeout reached when calling change_gripper service")
+
+        result: ChangeGripper.Response
+        result = future.result()
+
+        if not result.success:
+            self.get_logger().error("Error calling change gripper service")
+        
+        waypoints = [build_pose(tc_pose.position.x, tc_pose.position.y,tc_pose.position.z + 0.4,
+                                quaternion_from_euler(0.0,pi,0.0))]
+        
+        self._move_floor_robot_cartesian(waypoints)
