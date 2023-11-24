@@ -969,13 +969,11 @@ class CompetitionInterface(Node):
             if time.time()-start_time>=timeout:
                 self.get_logger().error("Unable to pick up part")
 
-    def  floor_robot_pick_bin_part(self,part_to_pick : PartMsg):
+    def floor_robot_pick_bin_part(self,part_to_pick : PartMsg):
         part_pose = Pose()
         found_part = False
         bin_side = ""
         
-        print("HOLD")
-
         for part in self._left_bins_parts:
             part : PartPoseMsg
             if (part.part.type == part_to_pick.type and part.part.color == part_to_pick.color):
@@ -1016,6 +1014,7 @@ class CompetitionInterface(Node):
         self.set_floor_robot_gripper_state(True)
         self._floor_robot_wait_for_attach(5.0, gripper_orientation)
         self.floor_robot_attached_part_ = part_to_pick
+        self.get_logger().info("Part attached. Attempting to move up")
         waypoints = [build_pose(part_pose.position.x, part_pose.position.y,
                                 part_pose.position.z+0.5,
                                 gripper_orientation)]
