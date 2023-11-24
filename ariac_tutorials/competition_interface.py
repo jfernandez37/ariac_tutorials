@@ -698,7 +698,7 @@ class CompetitionInterface(Node):
 
     def _call_get_position_fk (self):
 
-        self.get_logger().info("Getting cartesian path")
+        self.get_logger().info("Getting position")
 
         request = GetPositionFK.Request()
 
@@ -717,7 +717,7 @@ class CompetitionInterface(Node):
         rclpy.spin_until_future_complete(self, future, timeout_sec=10)
 
         if not future.done():
-            raise Error("Timeout reached when calling move_cartesian service")
+            raise Error("Timeout reached when calling get_position_fk service")
 
         result: GetPositionFK.Response
         result = future.result()
@@ -770,11 +770,8 @@ class CompetitionInterface(Node):
             self._ariac_robots_state = scene.current_state
             self._ariac_robots_state.update()
 
-            fk_posestamped = self._call_get_position_fk()
-
-            # Max step
             self._ariac_robots_state.update()
-            trajectory_msg = self._call_get_cartesian_path(waypoints)
+            trajectory_msg = self._call_get_cartesian_path(waypoints,0.1)
             self._ariac_robots_state.update()
             trajectory = RobotTrajectory(self._ariac_robots.get_robot_model())
             trajectory.set_robot_trajectory_msg(self._ariac_robots_state, trajectory_msg)
@@ -870,11 +867,15 @@ class CompetitionInterface(Node):
         self._right_bins_parts = msg.part_poses
         self._right_bins_camera_pose = msg.sensor_pose
 
-    def _floor_robot_wait_for_attach(self,timeout : float):
+    def _floor_robot_wait_for_attach(self,timeout : float, orientation : Quaternion):
         start_time = time.time()
         while not self._floor_robot_gripper_state.attached:
-            self._move_floor_robot_cartesian(0.0, 0.0, -0.001)
-            sleep(0.2)
+            current_pose = self._call_get_position_fk()[0].pose
+            waypoints = [build_pose(current_pose.position.x, current_pose.position.y,
+                                    current_pose.position.z-0.001,
+                                    orientation)]
+            self._move_floor_robot_cartesian(waypoints)
+            sleep(0.1)
             if time.time()-start_time>=timeout:
                 self.get_logger().error("Unable to pick up part")
 
@@ -914,12 +915,12 @@ class CompetitionInterface(Node):
 
         waypoints = []
         waypoints.append(build_pose(part_pose.position.x, part_pose.position.y,
-                                    part_pose.position.z+CompetitionInterface._part_heights[part_to_pick.type]+0.005,
+                                    part_pose.position.z+CompetitionInterface._part_heights[part_to_pick.type]+0.003,
                                     gripper_orientation))
         self._move_floor_robot_cartesian(waypoints)
         self.set_floor_robot_gripper_state(True)
-        self._floor_robot_wait_for_attach(5.0)
-
+        self._floor_robot_wait_for_attach(30.0, gripper_orientation)
+        self.get_logger().info("Part attached")
         waypoints = []
         waypoints.append(build_pose(part_pose.position.x, part_pose.position.y,
                                     part_pose.position.z+0.5,
