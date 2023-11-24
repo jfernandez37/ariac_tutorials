@@ -1,3 +1,4 @@
+from argparse import _MutuallyExclusiveGroup
 from time import sleep
 from math import pi
 from copy import copy
@@ -12,6 +13,7 @@ from rclpy.time import Duration
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.parameter import Parameter
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 
 from geometry_msgs.msg import PoseStamped, Pose, Point
 from shape_msgs.msg import Mesh, MeshTriangle
@@ -158,6 +160,10 @@ class CompetitionInterface(Node):
         )
 
         self.set_parameters([sim_time])
+        
+        # ROS2 callback groups
+        self.ariac_cb_group = MutuallyExclusiveCallbackGroup()
+        self.moveit_cb_group = MutuallyExclusiveCallbackGroup()
 
         # Service client for starting the competition
         self._start_competition_client = self.create_client(Trigger, '/ariac/start_competition')
@@ -167,17 +173,11 @@ class CompetitionInterface(Node):
             CompetitionStateMsg,
             '/ariac/competition_state',
             self._competition_state_cb,
-            10)
+            10,
+            callback_group=self.ariac_cb_group)
         
         # Store the state of the competition
         self._competition_state: CompetitionStateMsg = None
-
-        # Subscriber to the break beam status topic
-        self._break_beam0_sub = self.create_subscription(
-            BreakBeamStatusMsg,
-            '/ariac/sensors/breakbeam_0/status',
-            self._breakbeam0_cb,
-            qos_profile_sensor_data)
         
         # Store the number of parts that crossed the beam
         self._conveyor_part_count = 0
@@ -185,13 +185,6 @@ class CompetitionInterface(Node):
         # Store whether the beam is broken
         self._object_detected = False
 
-        # Subscriber to the logical camera topic
-        self._advanced_camera0_sub = self.create_subscription(
-            AdvancedLogicalCameraImageMsg,
-            '/ariac/sensors/advanced_camera_0/image',
-            self._advanced_camera0_cb,
-            qos_profile_sensor_data)
-        
         # Store each camera image as an AdvancedLogicalCameraImage object
         self._camera_image: AdvancedLogicalCameraImage = None
 
@@ -200,10 +193,11 @@ class CompetitionInterface(Node):
             OrderMsg,
             '/ariac/orders',
             self._orders_cb,
-            10)
+            10,
+            callback_group=self.ariac_cb_group)
         
         # Flag for parsing incoming orders
-        self._parse_incoming_order = False
+        self._parse_incoming_order = True
         
         # List of orders
         self._orders = []
@@ -213,7 +207,8 @@ class CompetitionInterface(Node):
             VacuumGripperState,
             '/ariac/floor_robot_gripper_state',
             self._floor_robot_gripper_state_cb,
-            qos_profile_sensor_data)
+            qos_profile_sensor_data,
+            callback_group=self.ariac_cb_group)
 
         # Service client for turning on/off the vacuum gripper on the floor robot
         self._floor_gripper_enable = self.create_client(
@@ -255,19 +250,23 @@ class CompetitionInterface(Node):
         self.left_bins_camera_sub = self.create_subscription(AdvancedLogicalCameraImageMsg,
                                                              "/ariac/sensors/left_bins_camera/image",
                                                              self._left_bins_camera_cb,
-                                                             qos_profile_sensor_data)
+                                                             qos_profile_sensor_data,
+                                                             callback_group=self.moveit_cb_group)
         self.right_bins_camera_sub = self.create_subscription(AdvancedLogicalCameraImageMsg,
                                                              "/ariac/sensors/right_bins_camera/image",
                                                              self._right_bins_camera_cb,
-                                                             qos_profile_sensor_data)
+                                                             qos_profile_sensor_data,
+                                                             callback_group=self.moveit_cb_group)
         self.kts1_camera_sub_ = self.create_subscription(AdvancedLogicalCameraImageMsg,
                                                          "/ariac/sensors/kts1_camera/image",
                                                          self._kts1_camera_cb,
-                                                         qos_profile_sensor_data)
+                                                         qos_profile_sensor_data,
+                                                             callback_group=self.moveit_cb_group)
         self.kts2_camera_sub_ = self.create_subscription(AdvancedLogicalCameraImageMsg,
                                                          "/ariac/sensors/kts2_camera/image",
                                                          self._kts2_camera_cb,
-                                                         qos_profile_sensor_data)
+                                                         qos_profile_sensor_data,
+                                                         callback_group=self.moveit_cb_group)
         
         # AGV status subs
         self._agv_locations = {1 : -1,
@@ -278,19 +277,23 @@ class CompetitionInterface(Node):
         self.agv1_status_sub = self.create_subscription(AGVStatusMsg,
                                                         "/ariac/agv1_status",
                                                         self._agv1_status_cb,
-                                                        10)
+                                                        10,
+                                                        callback_group=self.moveit_cb_group)
         self.agv2_status_sub = self.create_subscription(AGVStatusMsg,
                                                         "/ariac/agv2_status",
                                                         self._agv2_status_cb,
-                                                        10)
+                                                        10,
+                                                        callback_group=self.moveit_cb_group)
         self.agv3_status_sub = self.create_subscription(AGVStatusMsg,
                                                         "/ariac/agv3_status",
                                                         self._agv3_status_cb,
-                                                        10)
+                                                        10,
+                                                        callback_group=self.moveit_cb_group)
         self.agv4_status_sub = self.create_subscription(AGVStatusMsg,
                                                         "/ariac/agv4_status",
                                                         self._agv4_status_cb,
-                                                        10)
+                                                        10,
+                                                        callback_group=self.moveit_cb_group)
         
         # TF
         self.tf_buffer = Buffer()
@@ -324,11 +327,12 @@ class CompetitionInterface(Node):
     def parse_incoming_order(self, value):
         self._parse_incoming_order = value
 
-    def _orders_cb(self, msg: Order):
+    def _orders_cb(self, msg: OrderMsg):
         '''Callback for the topic /ariac/orders
         Arguments:
             msg -- Order message
         '''
+        self.get_logger().info("Got an order. Adding it to self._orders" + "\n"*10)
         order = Order(msg)
         self._orders.append(order)
         if self._parse_incoming_order:
@@ -1012,7 +1016,7 @@ class CompetitionInterface(Node):
                                 gripper_orientation)]
         self._move_floor_robot_cartesian(waypoints)
         self.set_floor_robot_gripper_state(True)
-        self._floor_robot_wait_for_attach(5.0, gripper_orientation)
+        self._floor_robot_wait_for_attach(30.0, gripper_orientation)
         self.floor_robot_attached_part_ = part_to_pick
         self.get_logger().info("Part attached. Attempting to move up")
         waypoints = [build_pose(part_pose.position.x, part_pose.position.y,
@@ -1022,8 +1026,11 @@ class CompetitionInterface(Node):
     
     def complete_orders(self):
         while len(self._orders) == 0:
+            self.get_logger().info("No orders have been recieved yet")
             sleep(1)
-        
+
+        self.add_objects_to_planning_scene()
+
         success = True
         while True:
             if (self._competition_state == CompetitionStateMsg.ENDED):
@@ -1107,7 +1114,7 @@ class CompetitionInterface(Node):
                                 gripper_orientation)]
         self._move_floor_robot_cartesian(tray_pose)
         self.set_floor_robot_gripper_state(True)
-        self._floor_robot_wait_for_attach(5.0, gripper_orientation)
+        self._floor_robot_wait_for_attach(30.0, gripper_orientation)
         waypoints = [build_pose(tray_pose.x, tray_pose.y,
                                 tray_pose.z+0.5,
                                 gripper_orientation)]

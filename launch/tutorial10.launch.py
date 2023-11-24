@@ -53,7 +53,7 @@ def launch_setup(context, *args, **kwargs):
         .joint_limits(file_path="config/joint_limits.yaml")
         .moveit_cpp(
             file_path=get_package_share_directory("ariac_tutorials")
-            + "/config/tutorial9_config.yaml"
+            + "/config/tutorial10_config.yaml"
         )
         .to_moveit_configs()
     )
@@ -78,7 +78,7 @@ def launch_setup(context, *args, **kwargs):
     parameters_dict.update(planning_scene_monitor_parameters)
     moveit_py_test = Node(
         package="ariac_tutorials",
-        executable="tutorial_9.py",
+        executable="tutorial_10.py",
         output="screen",
         parameters=[
             parameters_dict
