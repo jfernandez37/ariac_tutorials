@@ -13,9 +13,9 @@ from rclpy.time import Duration
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.parameter import Parameter
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 
-from geometry_msgs.msg import PoseStamped, Pose, Point
+from geometry_msgs.msg import PoseStamped, Pose, Point, TransformStamped
 from shape_msgs.msg import Mesh, MeshTriangle
 from moveit_msgs.msg import CollisionObject
 from std_msgs.msg import Header
@@ -164,6 +164,7 @@ class CompetitionInterface(Node):
         # ROS2 callback groups
         self.ariac_cb_group = MutuallyExclusiveCallbackGroup()
         self.moveit_cb_group = MutuallyExclusiveCallbackGroup()
+        self.orders_cb_group = ReentrantCallbackGroup()
 
         # Service client for starting the competition
         self._start_competition_client = self.create_client(Trigger, '/ariac/start_competition')
@@ -194,7 +195,7 @@ class CompetitionInterface(Node):
             '/ariac/orders',
             self._orders_cb,
             10,
-            callback_group=self.ariac_cb_group)
+            callback_group=self.orders_cb_group)
         
         # Flag for parsing incoming orders
         self._parse_incoming_order = True
@@ -388,10 +389,11 @@ class CompetitionInterface(Node):
             return
         # Wait for competition to be ready
         while self._competition_state != CompetitionStateMsg.READY:
-            try:
-                rclpy.spin_once(self)
-            except KeyboardInterrupt:
-                return
+            # try:
+            #     rclpy.spin_once(self)
+            # except KeyboardInterrupt:
+            #     return
+            pass
 
         self.get_logger().info('Competition is ready. Starting...')
 
@@ -404,8 +406,10 @@ class CompetitionInterface(Node):
         request = Trigger.Request()
         future = self._start_competition_client.call_async(request)
 
+        while not future.done():
+            pass
         # Wait until the service call is completed
-        rclpy.spin_until_future_complete(self, future)
+        # rclpy.spin_until_future_complete(self, future)
 
         if future.result().success:
             self.get_logger().info('Started competition.')
@@ -730,7 +734,6 @@ class CompetitionInterface(Node):
                                  max_step : float):
 
         self.get_logger().info("Getting cartesian path")
-        
         self._ariac_robots_state.update()
 
         request = GetCartesianPath.Request()
@@ -746,10 +749,11 @@ class CompetitionInterface(Node):
         request.waypoints = waypoints
         request.max_step = max_step
 
+        
         future = self.get_cartesian_path_client.call_async(request)
 
-
         rclpy.spin_until_future_complete(self, future, timeout_sec=10)
+
 
         if not future.done():
             raise Error("Timeout reached when calling move_cartesian service")
@@ -761,7 +765,7 @@ class CompetitionInterface(Node):
 
     def _call_get_position_fk (self):
 
-        self.get_logger().info("Getting cartesian path")
+        self.get_logger().info("Getting position using fk")
 
         request = GetPositionFK.Request()
 
@@ -771,7 +775,6 @@ class CompetitionInterface(Node):
         request.header = header
 
         request.fk_link_names = ["floor_gripper"]
-        self._ariac_robots_state.update()
         request.robot_state = robotStateToRobotStateMsg(self._ariac_robots_state)
 
         future = self.get_position_fk_client.call_async(request)
@@ -964,7 +967,8 @@ class CompetitionInterface(Node):
     def _floor_robot_wait_for_attach(self,timeout : float, orientation : Quaternion):
         start_time = time.time()
         while not self._floor_robot_gripper_state.attached:
-            current_pose = self._call_get_position_fk()[0].pose
+            self._ariac_robots_state.update()
+            current_pose = self._ariac_robots_state.get_pose("floor_gripper")
             waypoints = [build_pose(current_pose.position.x, current_pose.position.y,
                                     current_pose.position.z-0.001,
                                     orientation)]
@@ -1026,8 +1030,7 @@ class CompetitionInterface(Node):
     
     def complete_orders(self):
         while len(self._orders) == 0:
-            self.get_logger().info("No orders have been recieved yet")
-            sleep(1)
+            self.get_logger().info("No orders have been recieved yet", throttle_duration_sec=5.0)
 
         self.add_objects_to_planning_scene()
 
@@ -1048,15 +1051,15 @@ class CompetitionInterface(Node):
                     break
 
             current_order = copy(self._orders[0])
-            current_order : OrderMsg
+            current_order : Order
             del self._orders[0]
             kitting_agv_num = -1
 
-            if current_order.type == OrderMsg.KITTING:
-                self.complete_kitting_order(current_order.kitting_task)
-                kitting_agv_num = current_order.kitting_task.agv_number
+            if current_order.order_type== OrderMsg.KITTING:
+                self.complete_kitting_order(current_order.order_task)
+                kitting_agv_num = current_order.order_task.agv_number
             else:
-                self.get_logger().info(f"Unable to complete {'assembly' if current_order.type == OrderMsg.ASSEMBLY else 'combined'} order")
+                self.get_logger().info(f"Unable to complete {'assembly' if current_order.order_type == OrderMsg.ASSEMBLY else 'combined'} order")
             
             agv_location = -1 
             
@@ -1066,16 +1069,16 @@ class CompetitionInterface(Node):
             self.submit_order(current_order.id)
         return success
 
-    def complete_kitting_order(self, kitting_task : OrderMsg.kitting_task):
+    def complete_kitting_order(self, kitting_task:KittingTask):
         self.move_floor_robot_home()
 
-        self._floor_robot_pick_and_place_tray(kitting_task.tray_id, kitting_task.agv_number)
+        self._floor_robot_pick_and_place_tray(kitting_task._tray_id, kitting_task._agv_number)
 
-        for kitting_part in kitting_task.parts:
-            self.floor_robot_pick_bin_part(kitting_part.part)
-            self._floor_robot_place_part_on_kit_tray(kitting_task.agv_number, kitting_part.quadrant)
+        for kitting_part in kitting_task._parts:
+            self.floor_robot_pick_bin_part(kitting_part._part)
+            self._floor_robot_place_part_on_kit_tray(kitting_task._agv_number, kitting_part.quadrant)
         
-        self.move_agv_to_station(kitting_task.agv_number, kitting_task.destination)
+        self.move_agv_to_station(kitting_task._agv_number, kitting_task._destination)
 
     def _floor_robot_pick_and_place_tray(self, tray_id, agv_number):
         tray_pose = Pose
@@ -1109,22 +1112,43 @@ class CompetitionInterface(Node):
         self._move_floor_robot_to_pose(build_pose(tray_pose.position.x, tray_pose.position.y,
                                                   tray_pose.position.z+0.5, gripper_orientation))
         
-        waypoints = [build_pose(tray_pose.x, tray_pose.y,
-                                tray_pose.z+0.015,
-                                gripper_orientation)]
-        self._move_floor_robot_cartesian(tray_pose)
-        self.set_floor_robot_gripper_state(True)
-        self._floor_robot_wait_for_attach(30.0, gripper_orientation)
-        waypoints = [build_pose(tray_pose.x, tray_pose.y,
-                                tray_pose.z+0.5,
+        waypoints = [build_pose(tray_pose.position.x, tray_pose.position.y,
+                                tray_pose.position.z+0.001,
                                 gripper_orientation)]
         self._move_floor_robot_cartesian(waypoints)
+        self.set_floor_robot_gripper_state(True)
+        self._floor_robot_wait_for_attach(30.0, gripper_orientation)
+        waypoints = [build_pose(tray_pose.position.x, tray_pose.position.y,
+                                tray_pose.position.z+0.5,
+                                gripper_orientation)]
+        self._move_floor_robot_cartesian(waypoints)
+
+        agv_tray_pose = self._frame_world_pose(f"agv{agv_number}_tray")
+        agv_rotation = rpy_from_quaternion(agv_tray_pose.orientation)[2]
+
+        agv_quaternion = quaternion_from_euler(0.0,pi,agv_rotation)
+
+        self._move_floor_robot_to_pose(build_pose(agv_tray_pose.position.x, agv_tray_pose.position.y,
+                                                  agv_tray_pose.position.z+0.5,agv_quaternion))
+        
+        waypoints = [build_pose(agv_tray_pose.position.x, agv_tray_pose.position.y,
+                                agv_tray_pose.position.z+0.01,agv_quaternion)]
+        
+        self._move_floor_robot_cartesian(waypoints)
+        self.set_floor_robot_gripper_state(False)
+        self.lock_agv_tray(agv_number)
+
+        waypoints = [build_pose(agv_tray_pose.position.x, agv_tray_pose.position.y,
+                                agv_tray_pose.position.z+0.3,quaternion_from_euler(0.0,pi,0.0))]
+
     
     def _frame_world_pose(self,frame_id : str):
-        try:
-            t = self.tf_buffer.lookup_transform("world",frame_id,0)
-        except:
-            self.get_logger().error("Could not get transform")
+        self.get_logger().info(f"Getting transform for frame: {frame_id}")
+        # try:
+        t = self.tf_buffer.lookup_transform("world",frame_id,rclpy.time.Time())
+        # except:
+        #     self.get_logger().error("Could not get transform")
+        #     quit()
         
         pose = Pose()
         pose.position.x = t.transform.translation.x
@@ -1144,23 +1168,23 @@ class CompetitionInterface(Node):
 
         part_drop_offset = build_pose(CompetitionInterface._quad_offsets[quadrant][0],
                                       CompetitionInterface._quad_offsets[quadrant][1],
-                                      0.0, Quaternion())
+                                      0.0, quaternion_from_euler(0.0,pi,0.0))
         
         part_drop_pose = multiply_pose(agv_tray_pose, part_drop_offset)
 
-        self._move_floor_robot_to_pose(build_pose(part_drop_pose.x, part_drop_pose.y,
-                                                  part_drop_pose.z+0.3, quaternion_from_euler(0.0, pi, 0.0)))
+        self._move_floor_robot_to_pose(build_pose(part_drop_pose.position.x, part_drop_pose.position.y,
+                                                  part_drop_pose.position.z+0.3, quaternion_from_euler(0.0, pi, 0.0)))
         
-        waypoints = [build_pose(part_drop_pose.x, part_drop_pose.y,
-                                part_drop_pose.z+CompetitionInterface._part_heights[self.floor_robot_attached_part_.type]+0.002, 
+        waypoints = [build_pose(part_drop_pose.position.x, part_drop_pose.position.y,
+                                part_drop_pose.position.z+CompetitionInterface._part_heights[self.floor_robot_attached_part_.type]+0.002, 
                                 quaternion_from_euler(0.0, pi, 0.0))]
         
         self._move_floor_robot_cartesian(waypoints)
 
         self.set_floor_robot_gripper_state(False)
 
-        waypoints = [build_pose(part_drop_pose.x, part_drop_pose.y,
-                                part_drop_pose.z+0.3, 
+        waypoints = [build_pose(part_drop_pose.position.x, part_drop_pose.position.y,
+                                part_drop_pose.position.z+0.3, 
                                 quaternion_from_euler(0.0, pi, 0.0))]
         
         self._move_floor_robot_cartesian(waypoints)
