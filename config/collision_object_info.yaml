@@ -6,8 +6,8 @@ bin1:
   orientation:
   - 0.0
   - 0.0
-  - 0.0
   - 1.0
+  - 0.0
   file: bin.stl
 bin2:
   position:
@@ -17,8 +17,8 @@ bin2:
   orientation:
   - 0.0
   - 0.0
-  - 0.0
   - 1.0
+  - 0.0
   file: bin.stl
 bin3:
   position:
@@ -28,8 +28,8 @@ bin3:
   orientation:
   - 0.0
   - 0.0
-  - 0.0
   - 1.0
+  - 0.0
   file: bin.stl
 bin4:
   position:
@@ -39,8 +39,8 @@ bin4:
   orientation:
   - 0.0
   - 0.0
-  - 0.0
   - 1.0
+  - 0.0
   file: bin.stl
 bin5:
   position:
@@ -50,8 +50,8 @@ bin5:
   orientation:
   - 0.0
   - 0.0
-  - 0.0
   - 1.0
+  - 0.0
   file: bin.stl
 bin6:
   position:
@@ -61,8 +61,8 @@ bin6:
   orientation:
   - 0.0
   - 0.0
-  - 0.0
   - 1.0
+  - 0.0
   file: bin.stl
 bin7:
   position:
@@ -72,8 +72,8 @@ bin7:
   orientation:
   - 0.0
   - 0.0
-  - 0.0
   - 1.0
+  - 0.0
   file: bin.stl
 bin8:
   position:
@@ -83,8 +83,8 @@ bin8:
   orientation:
   - 0.0
   - 0.0
-  - 0.0
   - 1.0
+  - 0.0
   file: bin.stl
 as1:
   position:
@@ -134,7 +134,7 @@ assembly_insert1:
   position:
   - -7.7
   - 3.0
-  - 0.0
+  - 1.011
   orientation:
   - 0.0
   - 0.0
@@ -145,7 +145,7 @@ assembly_insert2:
   position:
   - -7.7
   - -3.0
-  - 0.0
+  - 1.011
   orientation:
   - 0.0
   - 0.0
@@ -156,7 +156,7 @@ assembly_insert3:
   position:
   - -12.7
   - 3.0
-  - 0.0
+  - 1.011
   orientation:
   - 0.0
   - 0.0
@@ -167,7 +167,7 @@ assembly_insert4:
   position:
   - -12.7
   - -3.0
-  - 0.0
+  - 1.011
   orientation:
   - 0.0
   - 0.0
@@ -204,6 +204,6 @@ kts2_table:
   orientation:
   - 0.0
   - 0.0
-  - 0.0
   - 1.0
+  - 0.0
   file: kit_tray_table.stl
