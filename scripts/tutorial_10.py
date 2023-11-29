@@ -19,8 +19,6 @@ def main(args=None):
     spin_thread = threading.Thread(target=executor.spin)
     spin_thread.start()
     
-    interface.get_logger().info("This is in the main thread")
-
     interface.start_competition()
     
     interface.complete_orders()

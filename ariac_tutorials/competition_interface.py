@@ -40,7 +40,8 @@ from ariac_msgs.msg import (
 from ariac_msgs.srv import (
     MoveAGV,
     VacuumGripperControl,
-    ChangeGripper
+    ChangeGripper,
+    SubmitOrder
 )
 
 from std_srvs.srv import Trigger
@@ -1061,7 +1062,7 @@ class CompetitionInterface(Node):
                 kitting_agv_num = current_order.order_task.agv_number
             else:
                 self.get_logger().info(f"Unable to complete {'assembly' if current_order.order_type == OrderMsg.ASSEMBLY else 'combined'} order")
-            
+                return False
             agv_location = -1 
             
             while agv_location !=AGVStatusMsg.WAREHOUSE:
@@ -1177,7 +1178,7 @@ class CompetitionInterface(Node):
                                                   part_drop_pose.position.z+0.3, quaternion_from_euler(0.0, pi, 0.0)))
         
         waypoints = [build_pose(part_drop_pose.position.x, part_drop_pose.position.y,
-                                part_drop_pose.position.z+CompetitionInterface._part_heights[self.floor_robot_attached_part_.type]+0.002, 
+                                part_drop_pose.position.z+CompetitionInterface._part_heights[self.floor_robot_attached_part_.type]+0.01, 
                                 quaternion_from_euler(0.0, pi, 0.0))]
         
         self._move_floor_robot_cartesian(waypoints, 0.3, 0.3)
@@ -1229,3 +1230,26 @@ class CompetitionInterface(Node):
                                 quaternion_from_euler(0.0,pi,0.0))]
         
         self._move_floor_robot_cartesian(waypoints, 0.3, 0.3)
+    
+    def submit_order(self, order_id):
+        submit_order_client = self.create_client(
+            SubmitOrder,
+            '/ariac/submit_order'
+        )
+        request = SubmitOrder.Request()
+        request.order_id = order_id
+
+        # Send the request
+        future = submit_order_client.call_async(request)
+
+        # Wait for the response
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        # Check the response
+        if future.result().success:
+            self.get_logger().info(f'Submitted order')
+        else:
+            self.get_logger().warn('Unable to submit order')
