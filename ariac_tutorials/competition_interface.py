@@ -1040,11 +1040,9 @@ class CompetitionInterface(Node):
         package_share_directory = get_package_share_directory("test_competitor")
         model_path = package_share_directory + "/meshes/" + self._part_types[part_to_pick.type]+".stl"
         attached_collision_object = self._makeAttachedMesh(part_name, part_pose,model_path)
-        # temp_scene = copy(self.planning_scene_msg)
-        # temp_scene.robot_state.attached_collision_objects.append(attached_collision_object)
-        # self.apply_planning_scene(temp_scene)
-        self.testing_adding_to_planning_scene(attached_collision_object)
-
+        temp_scene = copy(self.planning_scene_msg)
+        temp_scene.robot_state.attached_collision_objects.append(attached_collision_object)
+        self.apply_planning_scene(temp_scene)
 
         self.floor_robot_attached_part_ = part_to_pick
         self.get_logger().info("Part attached. Attempting to move up")
