@@ -1006,13 +1006,15 @@ class CompetitionInterface(Node):
         else:
             self.get_logger().info(f"Part found in {bin_side}")
 
-        part_rotation = rpy_from_quaternion(part_pose.orientation)[2]
         if self._floor_robot_gripper_state.type != "part_gripper":
             if part_pose.position.y<0:
                 station = "kts1"
             else: 
                 station = "kts2"
             self._floor_robot_change_gripper(station, "parts")
+        
+        part_rotation = rpy_from_quaternion(part_pose.orientation)[2]
+        
         gripper_orientation = quaternion_from_euler(0.0,pi,part_rotation)
         self._move_floor_robot_to_pose(build_pose(part_pose.position.x, part_pose.position.y,
                                                   part_pose.position.z+0.5, gripper_orientation))
@@ -1080,7 +1082,7 @@ class CompetitionInterface(Node):
             self.floor_robot_pick_bin_part(kitting_part._part)
             self._floor_robot_place_part_on_kit_tray(kitting_task._agv_number, kitting_part.quadrant)
         
-        self.move_agv_to_station(kitting_task._agv_number, kitting_task._destination)
+        self.move_agv(kitting_task._agv_number, kitting_task._destination)
 
     def _floor_robot_pick_and_place_tray(self, tray_id, agv_number):
         tray_pose = Pose
@@ -1253,3 +1255,39 @@ class CompetitionInterface(Node):
             self.get_logger().info(f'Submitted order')
         else:
             self.get_logger().warn('Unable to submit order')
+    
+    def move_agv(self, num, destination):
+        '''
+        Move an AGV to an assembly station.
+        Args:
+            num (int): AGV number
+            destination(int): Destination
+        Raises:
+            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
+        '''
+
+        # Create a client to send a request to the `/ariac/move_agv` service.
+        mover = self.create_client(
+            MoveAGV,
+            f'/ariac/move_agv{num}')
+
+        # Create a request object.
+        request = MoveAGV.Request()
+
+        # Set the request location.
+        request.location = destination
+
+        # Send the request.
+        future = mover.call_async(request)
+
+        # Wait for the server to respond.
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        # Check the result of the service call.
+        if future.result().success:
+            self.get_logger().info(f'Moved AGV{num} to {self._destinations[destination]}')
+        else:
+            self.get_logger().warn(future.result().message)  
