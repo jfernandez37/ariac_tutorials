@@ -1070,7 +1070,7 @@ class CompetitionInterface(Node):
             while agv_location !=AGVStatusMsg.WAREHOUSE:
                 agv_location = self._agv_locations[kitting_agv_num]
             
-            self.submit_order(current_order.id)
+            self.submit_order(current_order.order_id)
         return success
 
     def complete_kitting_order(self, kitting_task:KittingTask):
