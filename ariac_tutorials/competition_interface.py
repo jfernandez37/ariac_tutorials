@@ -22,7 +22,8 @@ from std_msgs.msg import Header
 
 from moveit.core.robot_trajectory import RobotTrajectory
 from moveit.core.robot_state import RobotState, robotStateToRobotStateMsg
-from moveit_msgs.srv import GetCartesianPath, GetPositionFK, ApplyPlanningScene
+from moveit_msgs.srv import GetCartesianPath, GetPositionFK, ApplyPlanningScene, GetPlanningScene
+from moveit_msgs.msg import PlanningScene
 
 from ariac_msgs.msg import (
     CompetitionState as CompetitionStateMsg,
@@ -41,7 +42,7 @@ from ariac_msgs.srv import (
     MoveAGV,
     VacuumGripperControl,
     ChangeGripper,
-    SubmitOrder
+    SubmitOrder,
 )
 
 from std_srvs.srv import Trigger
@@ -307,6 +308,15 @@ class CompetitionInterface(Node):
         self.floor_robot_attached_part_ = PartMsg()
 
         self._change_gripper_client = self.create_client(ChangeGripper, "/ariac/floor_robot_change_gripper")
+        
+        # Planning Scene Info
+        self.planning_scene_sub = self.create_subscription(PlanningScene,
+                                                           "/planning_scene",
+                                                            self.get_planning_scene_msg,
+                                                            10,
+                                                            callback_group=self.moveit_cb_group)
+        self.planning_scene_msg = PlanningScene()
+        
 
 
     @property
@@ -1031,9 +1041,9 @@ class CompetitionInterface(Node):
         package_share_directory = get_package_share_directory("test_competitor")
         model_path = package_share_directory + "/meshes/" + self._part_types[part_to_pick.type]+".stl"
         attached_collision_object = self._makeAttachedMesh(part_name, part_pose,model_path)
-        with self._planning_scene_monitor.read_write() as scene:
-            scene.robot_state.attached_collision_objects.append(attached_collision_object)
-            self.apply_planning_scene(scene)
+        temp_scene = copy(self.planning_scene_msg)
+        temp_scene.robot_state.attached_collision_objects.append(attached_collision_object)
+        self.apply_planning_scene(temp_scene)
 
 
         self.floor_robot_attached_part_ = part_to_pick
@@ -1329,6 +1339,7 @@ class CompetitionInterface(Node):
                 mesh.vertices.append(point)
             
         o = AttachedCollisionObject()
+        o.link_name = "floor_gripper"
         o.object.header.frame_id = "world"
         o.object.id = name
         o.object.meshes.append(mesh)
@@ -1357,4 +1368,7 @@ class CompetitionInterface(Node):
         if future.result().success:
             self.get_logger().info(f'Failed to apply_planning_scene')
         else:
-            self.get_logger().warn(future.result().message) 
+            self.get_logger().warn(future.result().message)
+    
+    def get_planning_scene_msg(self, msg:PlanningScene) -> PlanningScene:
+        self.planning_scene_msg = msg
