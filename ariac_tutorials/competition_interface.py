@@ -1032,7 +1032,7 @@ class CompetitionInterface(Node):
         model_path = package_share_directory + "/meshes/" + self._part_types[part_to_pick.type]+".stl"
         attached_collision_object = self._makeAttachedMesh(part_name, part_pose,model_path)
         with self._planning_scene_monitor.read_write() as scene:
-            scene.attached_collision_objects.append(attached_collision_object)
+            scene.robot_state.attached_collision_objects.append(attached_collision_object)
             self.apply_planning_scene(scene)
 
 
