@@ -1210,8 +1210,11 @@ class CompetitionInterface(Node):
         self.set_floor_robot_gripper_state(False)
 
         temp_scene = copy(self.planning_scene_msg)
-        temp_scene.robot_state.attached_collision_objects.clear()
-        self.apply_planning_scene(temp_scene)
+        with self._planning_scene_monitor.read_write() as scene:
+            temp_scene.world.collision_objects = self.planning_scene_msg.world.collision_objects
+            temp_scene.robot_state = scene.current_state
+            temp_scene.robot_state.attached_collision_objects.clear()
+            self.apply_planning_scene(temp_scene)
 
         waypoints = [build_pose(part_drop_pose.position.x, part_drop_pose.position.y,
                                 part_drop_pose.position.z+0.3, 
