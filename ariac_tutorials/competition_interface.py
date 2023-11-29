@@ -22,7 +22,7 @@ from std_msgs.msg import Header
 
 from moveit.core.robot_trajectory import RobotTrajectory
 from moveit.core.robot_state import RobotState, robotStateToRobotStateMsg
-from moveit_msgs.srv import GetCartesianPath, GetPositionFK
+from moveit_msgs.srv import GetCartesianPath, GetPositionFK, ApplyPlanningScene
 
 from ariac_msgs.msg import (
     CompetitionState as CompetitionStateMsg,
@@ -1026,8 +1026,15 @@ class CompetitionInterface(Node):
         self.set_floor_robot_gripper_state(True)
         self._floor_robot_wait_for_attach(30.0, gripper_orientation)
 
-        part_name = self._part_colors[part_to_pick.type]+"_"+self._part_types[part_to_pick.type]
-        self._add_attached_model_to_planning_scene(part_name, self._part_types[part_to_pick.type]+".stl", part_pose)
+        part_name = self._part_colors[part_to_pick.color]+"_"+self._part_types[part_to_pick.type]
+
+        package_share_directory = get_package_share_directory("test_competitor")
+        model_path = package_share_directory + "/meshes/" + self._part_types[part_to_pick.type]+".stl"
+        attached_collision_object = self._makeAttachedMesh(part_name, part_pose,model_path)
+        with self._planning_scene_monitor.read_write() as scene:
+            scene.attached_collision_objects.append(attached_collision_object)
+            self.apply_planning_scene(scene)
+
 
         self.floor_robot_attached_part_ = part_to_pick
         self.get_logger().info("Part attached. Attempting to move up")
@@ -1296,7 +1303,7 @@ class CompetitionInterface(Node):
         else:
             self.get_logger().warn(future.result().message)  
                     
-    def _makeAttachedMesh(self, name, pose, filename, frame_id) -> CollisionObject:
+    def _makeAttachedMesh(self, name, pose, filename) -> AttachedCollisionObject:
         with pyassimp.load(filename) as scene:
             assert len(scene.meshes)
             
@@ -1322,22 +1329,33 @@ class CompetitionInterface(Node):
                 mesh.vertices.append(point)
             
         o = AttachedCollisionObject()
-        o.object.header.frame_id = frame_id
+        o.object.header.frame_id = "world"
         o.object.id = name
         o.object.meshes.append(mesh)
         o.object.mesh_poses.append(pose)
         o.object.operation = o.ADD
         return o
     
-    def _add_attached_model_to_planning_scene(self,
-                                    name : str,
-                                    mesh_file : str,
-                                    model_pose : Pose,
-                                    frame_id = "floor_gripper"):
-        self.get_logger().info(f"Adding {name} to planning scene")
-        package_share_directory = get_package_share_directory("test_competitor")
-        model_path = package_share_directory + "/meshes/"+mesh_file
-        collision_object = self._makeMesh(name, model_pose,model_path, frame_id = frame_id)
-        with self._planning_scene_monitor.read_write() as scene:
-            scene.apply_collision_object(collision_object)
-            scene.current_state.update()
+    def apply_planning_scene(self, scene):
+        apply_planning_scene_client = self.create_client(ApplyPlanningScene, "/apply_planning_scene")
+
+        # Create a request object.
+        request = ApplyPlanningScene.Request()
+
+        # Set the request location.
+        request.scene = scene
+
+        # Send the request.
+        future = apply_planning_scene_client.call_async(request)
+
+        # Wait for the server to respond.
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        # Check the result of the service call.
+        if future.result().success:
+            self.get_logger().info(f'Failed to apply_planning_scene')
+        else:
+            self.get_logger().warn(future.result().message) 
