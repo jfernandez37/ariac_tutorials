@@ -17,7 +17,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallb
 
 from geometry_msgs.msg import PoseStamped, Pose, Point, TransformStamped
 from shape_msgs.msg import Mesh, MeshTriangle
-from moveit_msgs.msg import CollisionObject
+from moveit_msgs.msg import CollisionObject, AttachedCollisionObject
 from std_msgs.msg import Header
 
 from moveit.core.robot_trajectory import RobotTrajectory
@@ -869,7 +869,7 @@ class CompetitionInterface(Node):
         
         self._plan_and_execute(self._ariac_robots, self._floor_robot, self.get_logger())
 
-    def _makeMesh(self, name, pose, filename) -> CollisionObject:
+    def _makeMesh(self, name, pose, filename, frame_id) -> CollisionObject:
         with pyassimp.load(filename) as scene:
             assert len(scene.meshes)
             
@@ -895,7 +895,7 @@ class CompetitionInterface(Node):
                 mesh.vertices.append(point)
             
         o = CollisionObject()
-        o.header.frame_id = "world"
+        o.header.frame_id = frame_id
         o.id = name
         o.meshes.append(mesh)
         o.mesh_poses.append(pose)
@@ -905,12 +905,12 @@ class CompetitionInterface(Node):
     def _add_model_to_planning_scene(self,
                                     name : str,
                                     mesh_file : str,
-                                    model_pose : Pose
-                                    ):
+                                    model_pose : Pose,
+                                    frame_id = "world"):
         self.get_logger().info(f"Adding {name} to planning scene")
         package_share_directory = get_package_share_directory("test_competitor")
         model_path = package_share_directory + "/meshes/"+mesh_file
-        collision_object = self._makeMesh(name, model_pose,model_path)
+        collision_object = self._makeMesh(name, model_pose,model_path, frame_id = frame_id)
         with self._planning_scene_monitor.read_write() as scene:
             scene.apply_collision_object(collision_object)
             scene.current_state.update()
@@ -1025,6 +1025,10 @@ class CompetitionInterface(Node):
         self._move_floor_robot_cartesian(waypoints, 0.3, 0.3)
         self.set_floor_robot_gripper_state(True)
         self._floor_robot_wait_for_attach(30.0, gripper_orientation)
+
+        part_name = self._part_colors[part_to_pick.type]+"_"+self._part_types[part_to_pick.type]
+        self._add_attached_model_to_planning_scene(part_name, self._part_types[part_to_pick.type]+".stl", part_pose)
+
         self.floor_robot_attached_part_ = part_to_pick
         self.get_logger().info("Part attached. Attempting to move up")
         waypoints = [build_pose(part_pose.position.x, part_pose.position.y,
@@ -1291,3 +1295,49 @@ class CompetitionInterface(Node):
             self.get_logger().info(f'Moved AGV{num} to {self._destinations[destination]}')
         else:
             self.get_logger().warn(future.result().message)  
+                    
+    def _makeAttachedMesh(self, name, pose, filename, frame_id) -> CollisionObject:
+        with pyassimp.load(filename) as scene:
+            assert len(scene.meshes)
+            
+            mesh = Mesh()
+            for face in scene.meshes[0].faces:
+                triangle = MeshTriangle()
+                if hasattr(face, 'indices'):
+                    if len(face.indices) == 3:
+                        triangle.vertex_indices = [face.indices[0],
+                                                    face.indices[1],
+                                                    face.indices[2]]
+                else:
+                    if len(face) == 3:
+                        triangle.vertex_indices = [face[0],
+                                                    face[1],
+                                                    face[2]]
+                mesh.triangles.append(triangle)
+            for vertex in scene.meshes[0].vertices:
+                point = Point()
+                point.x = float(vertex[0])
+                point.y = float(vertex[1])
+                point.z = float(vertex[2])
+                mesh.vertices.append(point)
+            
+        o = AttachedCollisionObject()
+        o.object.header.frame_id = frame_id
+        o.object.id = name
+        o.object.meshes.append(mesh)
+        o.object.mesh_poses.append(pose)
+        o.object.operation = o.ADD
+        return o
+    
+    def _add_attached_model_to_planning_scene(self,
+                                    name : str,
+                                    mesh_file : str,
+                                    model_pose : Pose,
+                                    frame_id = "floor_gripper"):
+        self.get_logger().info(f"Adding {name} to planning scene")
+        package_share_directory = get_package_share_directory("test_competitor")
+        model_path = package_share_directory + "/meshes/"+mesh_file
+        collision_object = self._makeMesh(name, model_pose,model_path, frame_id = frame_id)
+        with self._planning_scene_monitor.read_write() as scene:
+            scene.apply_collision_object(collision_object)
+            scene.current_state.update()
