@@ -1333,7 +1333,6 @@ class CompetitionInterface(Node):
         o.object.id = name
         o.object.meshes.append(mesh)
         o.object.mesh_poses.append(pose)
-        o.object.operation = o.ADD
         return o
     
     def apply_planning_scene(self, scene):
