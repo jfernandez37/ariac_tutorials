@@ -756,7 +756,7 @@ class CompetitionInterface(Node):
         request.group_name = "floor_robot"
         request.link_name = "floor_gripper"
         request.waypoints = waypoints
-        request.max_step = 0.2
+        request.max_step = 0.1
         request.avoid_collisions = True
         request.max_velocity_scaling_factor = max_velocity_scaling_factor
         request.max_acceleration_scaling_factor = max_acceleration_scaling_factor
