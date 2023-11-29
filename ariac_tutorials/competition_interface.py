@@ -1043,7 +1043,7 @@ class CompetitionInterface(Node):
         temp_scene = copy(self.planning_scene_msg)
         with self._planning_scene_monitor.read_write() as scene:
             temp_scene.world.collision_objects = self.planning_scene_msg.world.collision_objects
-            temp_scene.robot_state = scene.current_state
+            temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
             temp_scene.robot_state.attached_collision_objects.append(attached_collision_object)
             self.apply_planning_scene(temp_scene)
 
@@ -1212,7 +1212,7 @@ class CompetitionInterface(Node):
         temp_scene = copy(self.planning_scene_msg)
         with self._planning_scene_monitor.read_write() as scene:
             temp_scene.world.collision_objects = self.planning_scene_msg.world.collision_objects
-            temp_scene.robot_state = scene.current_state
+            temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
             temp_scene.robot_state.attached_collision_objects.clear()
             self.apply_planning_scene(temp_scene)
 
