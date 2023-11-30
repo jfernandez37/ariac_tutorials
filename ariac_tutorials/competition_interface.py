@@ -315,6 +315,9 @@ class CompetitionInterface(Node):
                                                             10,
                                                             callback_group=self.moveit_cb_group)
         self.planning_scene_msg = PlanningScene()
+
+        # Meshes file path
+        self.mesh_file_path = get_package_share_directory("test_competitor") + "/meshes/"
         
 
 
@@ -917,8 +920,7 @@ class CompetitionInterface(Node):
                                     model_pose : Pose,
                                     frame_id = "world"):
         self.get_logger().info(f"Adding {name} to planning scene")
-        package_share_directory = get_package_share_directory("test_competitor")
-        model_path = package_share_directory + "/meshes/"+mesh_file
+        model_path = self.mesh_file_path+mesh_file
         collision_object = self._makeMesh(name, model_pose,model_path, frame_id = frame_id)
         with self._planning_scene_monitor.read_write() as scene:
             scene.apply_collision_object(collision_object)
@@ -1035,17 +1037,7 @@ class CompetitionInterface(Node):
         self.set_floor_robot_gripper_state(True)
         self._floor_robot_wait_for_attach(30.0, gripper_orientation)
 
-        part_name = self._part_colors[part_to_pick.color]+"_"+self._part_types[part_to_pick.type]
-
-        package_share_directory = get_package_share_directory("test_competitor")
-        model_path = package_share_directory + "/meshes/" + self._part_types[part_to_pick.type]+".stl"
-        attached_collision_object = self._makeAttachedMesh(part_name, part_pose,model_path)
-        temp_scene = copy(self.planning_scene_msg)
-        with self._planning_scene_monitor.read_write() as scene:
-            temp_scene.world.collision_objects = self.planning_scene_msg.world.collision_objects
-            temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
-            temp_scene.robot_state.attached_collision_objects.append(attached_collision_object)
-            self.apply_planning_scene(temp_scene)
+        self._attach_model_to_floor_gripper(part_to_pick, part_pose)
 
         self.floor_robot_attached_part_ = part_to_pick
         self.get_logger().info("Part attached. Attempting to move up")
@@ -1209,12 +1201,7 @@ class CompetitionInterface(Node):
 
         self.set_floor_robot_gripper_state(False)
 
-        temp_scene = copy(self.planning_scene_msg)
-        with self._planning_scene_monitor.read_write() as scene:
-            temp_scene.world.collision_objects = self.planning_scene_msg.world.collision_objects
-            temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
-            temp_scene.robot_state.attached_collision_objects.clear()
-            self.apply_planning_scene(temp_scene)
+        self._remove_model_from_floor_gripper()
 
         waypoints = [build_pose(part_drop_pose.position.x, part_drop_pose.position.y,
                                 part_drop_pose.position.z+0.3, 
@@ -1381,7 +1368,22 @@ class CompetitionInterface(Node):
     def get_planning_scene_msg(self, msg:PlanningScene) -> PlanningScene:
         self.planning_scene_msg = msg
     
-    def testing_adding_to_planning_scene(self, object : AttachedCollisionObject):
+    def _attach_model_to_floor_gripper(self, part_to_pick : PartMsg, part_pose : Pose):
+        part_name = self._part_colors[part_to_pick.color]+"_"+self._part_types[part_to_pick.type]
+
+        model_path = self.mesh_file_path + self._part_types[part_to_pick.type]+".stl"
+        attached_collision_object = self._makeAttachedMesh(part_name, part_pose,model_path)
+        temp_scene = copy(self.planning_scene_msg)
         with self._planning_scene_monitor.read_write() as scene:
-            scene.apply_collision_object(object)
-            scene.current_state.update()
+            temp_scene.world.collision_objects = self.planning_scene_msg.world.collision_objects
+            temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
+            temp_scene.robot_state.attached_collision_objects.append(attached_collision_object)
+            self.apply_planning_scene(temp_scene)
+    
+    def _remove_model_from_floor_gripper(self):
+        temp_scene = copy(self.planning_scene_msg)
+        with self._planning_scene_monitor.read_write() as scene:
+            temp_scene.world.collision_objects = self.planning_scene_msg.world.collision_objects
+            temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
+            temp_scene.robot_state.attached_collision_objects.clear()
+            self.apply_planning_scene(temp_scene)
