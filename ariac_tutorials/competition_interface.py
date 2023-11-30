@@ -868,14 +868,16 @@ class CompetitionInterface(Node):
         self._right_bins_camera_pose = msg.sensor_pose
 
     def _floor_robot_wait_for_attach(self,timeout : float, orientation : Quaternion):
+        with self._planning_scene_monitor.read_write() as scene:
+            current_pose = scene.current_state.get_pose("floor_gripper")
         start_time = time.time()
         while not self._floor_robot_gripper_state.attached:
-            current_pose = self._call_get_position_fk()[0].pose
-            waypoints = [build_pose(current_pose.position.x, current_pose.position.y,
+            current_pose = build_pose(current_pose.position.x, current_pose.position.y,
                                     current_pose.position.z-0.001,
-                                    orientation)]
+                                    orientation)
+            waypoints = [current_pose]
             self._move_floor_robot_cartesian(waypoints)
-            sleep(0.1)
+            self.wait(0.2)
             if time.time()-start_time>=timeout:
                 self.get_logger().error("Unable to pick up part")
 
@@ -919,7 +921,7 @@ class CompetitionInterface(Node):
                                     gripper_orientation))
         self._move_floor_robot_cartesian(waypoints)
         self.set_floor_robot_gripper_state(True)
-        self._floor_robot_wait_for_attach(30.0, gripper_orientation)
+        self._floor_robot_wait_for_attach(5.0, gripper_orientation)
         self.get_logger().info("Part attached")
         waypoints = []
         waypoints.append(build_pose(part_pose.position.x, part_pose.position.y,
