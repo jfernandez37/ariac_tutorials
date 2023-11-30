@@ -838,8 +838,10 @@ class CompetitionInterface(Node):
             robot.execute(robot_trajectory, controllers=[])
         else:
             logger.error("Planning failed")
+            return False
 
         sleep(sleep_time)
+        return True
 
     def move_floor_robot_home(self):
         self._floor_robot.set_start_state_to_current_state()
@@ -880,7 +882,8 @@ class CompetitionInterface(Node):
             self.get_logger().info(str(pose_goal.pose))
             self._floor_robot.set_goal_state(pose_stamped_msg=pose_goal, pose_link="floor_gripper")
         
-        self._plan_and_execute(self._ariac_robots, self._floor_robot, self.get_logger())
+        while not self._plan_and_execute(self._ariac_robots, self._floor_robot, self.get_logger()):
+            pass
 
     def _makeMesh(self, name, pose, filename, frame_id) -> CollisionObject:
         with pyassimp.load(filename) as scene:
