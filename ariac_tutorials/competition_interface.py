@@ -23,6 +23,7 @@ from std_msgs.msg import Header
 from moveit.core.robot_trajectory import RobotTrajectory
 from moveit.core.robot_state import RobotState, robotStateToRobotStateMsg
 from moveit_msgs.srv import GetCartesianPath, GetPositionFK, ApplyPlanningScene, GetPlanningScene
+from moveit.core.kinematic_constraints import construct_joint_constraint
 
 from ariac_msgs.msg import (
     CompetitionState as CompetitionStateMsg,
@@ -60,7 +61,6 @@ from ariac_tutorials.utils import (
     KittingPart
 )
 
-from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
@@ -150,6 +150,13 @@ class CompetitionInterface(Node):
                      2 : (0.08, 0.12),
                      3 : (-0.08, -0.12),
                      4 : (0.08, -0.12)}
+
+    _rail_positions = {"agv1":-4.5,
+                       "agv2":-1.2,
+                       "agv3":1.2,
+                       "agv4":4.5,
+                       "left_bins":3,
+                       "right_bins":-3}
 
     def __init__(self):
         super().__init__('competition_interface')
@@ -320,6 +327,22 @@ class CompetitionInterface(Node):
 
         # Meshes file path
         self.mesh_file_path = get_package_share_directory("test_competitor") + "/meshes/"
+
+        self.ceiling_joint_positions_arrs = {
+            "ceiling_as1_js_":[1,-3,1.571,0,-2.37,2.37,3.14,-1.57,0],
+            "ceiling_as2_js_":[-4,-3,1.571,0,-2.37,2.37,3.14,-1.57,0],
+            "ceiling_as3_js_":[1,3,1.571,0,-2.37,2.37,3.14,-1.57,0],
+            "ceiling_as4_js_":[-4,3,1.571,0,-2.37,2.37,3.14,-1.57,0],
+        }
+        self.ceiling_position_dict = {key:self._create_ceiling_joint_position_state(self.ceiling_joint_positions_arrs[key])
+                                      for key in self.ceiling_joint_positions_arrs.keys()}
+        
+        self.floor_joint_positions_arrs = {
+            "floor_kts1_js_":[4.0,1.57,-1.57,1.57,-1.57,-1.57,0.0],
+            "floor_kts2_js_":[-4.0,-1.57,-1.57,1.57,-1.57,-1.57,0.0]
+        }
+        self.floor_position_dict = {key:self._create_floor_joint_position_state(self.floor_joint_positions_arrs[key])
+                                      for key in self.floor_joint_positions_arrs.keys()}
         
 
 
@@ -1027,8 +1050,10 @@ class CompetitionInterface(Node):
                 station = "kts1"
             else: 
                 station = "kts2"
+            self.floor_robot_move_to_joint_position(f"floor_{station}_js_")
             self._floor_robot_change_gripper(station, "parts")
-        
+        self.floor_robot_move_joints_dict({"linear_actuator_joint":self._rail_positions[bin_side],
+                                       "floor_shoulder_pan_joint":0})
         part_rotation = rpy_from_quaternion(part_pose.orientation)[2]
         
         gripper_orientation = quaternion_from_euler(0.0,pi,part_rotation)
@@ -1129,6 +1154,8 @@ class CompetitionInterface(Node):
         
         tray_rotation = rpy_from_quaternion(tray_pose.orientation)[2]
 
+        self.floor_robot_move_to_joint_position(f"floor_{station}_js_")
+
         if self._floor_robot_gripper_state.type != "tray_gripper":
             self._floor_robot_change_gripper(station, "trays")
         
@@ -1146,6 +1173,9 @@ class CompetitionInterface(Node):
                                 tray_pose.position.z+0.5,
                                 gripper_orientation)]
         self._move_floor_robot_cartesian(waypoints, 0.3, 0.3)
+
+        self.floor_robot_move_joints_dict({"linear_actuator_joint":self._rail_positions[f"agv{agv_number}"],
+                                       "floor_shoulder_pan_joint":0})
 
         agv_tray_pose = self._frame_world_pose(f"agv{agv_number}_tray")
         agv_rotation = rpy_from_quaternion(agv_tray_pose.orientation)[2]
@@ -1188,6 +1218,9 @@ class CompetitionInterface(Node):
         if not self._floor_robot_gripper_state.attached:
             self.get_logger().error("No part attached")
             return False
+
+        self.floor_robot_move_joints_dict({"linear_actuator_joint":self._rail_positions[f"agv{agv_num}"],
+                                       "floor_shoulder_pan_joint":0})
         
         agv_tray_pose = self._frame_world_pose(f"agv{agv_num}_tray")
 
@@ -1403,3 +1436,65 @@ class CompetitionInterface(Node):
             self.apply_planning_scene(temp_scene)
             scene.current_state.update()
             self._ariac_robots_state = scene.current_state
+    
+    def ceiling_robot_move_to_joint_position(self, position_name : str):
+        with self._planning_scene_monitor.read_write() as scene:
+            self._ceiling_robot.set_start_state_to_current_state()
+            scene.current_state.joint_positions = self.ceiling_position_dict[position_name]
+            joint_constraint = construct_joint_constraint(
+                    robot_state=scene.current_state,
+                    joint_model_group=self._ariac_robots.get_robot_model().get_joint_model_group("ceiling_robot"),
+            )
+            self._ceiling_robot.set_goal_state(motion_plan_constraints=[joint_constraint])
+        self._plan_and_execute(self._ariac_robots,self._ceiling_robot, self.get_logger())
+    
+    def _create_ceiling_joint_position_state(self, joint_positions : list)-> dict:
+        return {"gantry_x_axis_joint":joint_positions[0],
+                "gantry_y_axis_joint":joint_positions[1],
+                "gantry_rotation_joint":joint_positions[2],
+                "ceiling_shoulder_pan_joint":joint_positions[3],
+                "ceiling_shoulder_lift_joint":joint_positions[4],
+                "ceiling_elbow_joint":joint_positions[5],
+                "ceiling_wrist_1_joint":joint_positions[6],
+                "ceiling_wrist_2_joint":joint_positions[7],
+                "ceiling_wrist_3_joint":joint_positions[8]}
+    
+    def floor_robot_move_to_joint_position(self, position_name : str):
+        with self._planning_scene_monitor.read_write() as scene:
+            self._floor_robot.set_start_state_to_current_state()
+            scene.current_state.joint_positions = self.floor_position_dict[position_name]
+            joint_constraint = construct_joint_constraint(
+                    robot_state=scene.current_state,
+                    joint_model_group=self._ariac_robots.get_robot_model().get_joint_model_group("floor_robot"),
+            )
+            self._floor_robot.set_goal_state(motion_plan_constraints=[joint_constraint])
+        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger())
+    
+    def _create_floor_joint_position_state(self, joint_positions : list)-> dict:
+        return {"linear_actuator_joint":joint_positions[0],
+                "floor_shoulder_pan_joint":joint_positions[1],
+                "floor_shoulder_lift_joint":joint_positions[2],
+                "floor_elbow_joint":joint_positions[3],
+                "floor_wrist_1_joint":joint_positions[4],
+                "floor_wrist_2_joint":joint_positions[5],
+                "floor_wrist_3_joint":joint_positions[6]}
+
+    def _create_floor_joint_position_dict(self, dict_positions = {}):
+        with self._planning_scene_monitor.read_write() as scene:
+            current_positions = scene.current_state.get_joint_group_positions("floor_robot")
+            current_position_dict = self._create_floor_joint_position_state(current_positions)
+            for key in dict_positions.keys():
+                current_position_dict[key] = dict_positions[key]
+        return current_position_dict
+
+    def floor_robot_move_joints_dict(self, dict_positions : dict):
+        new_joint_position = self._create_floor_joint_position_dict(dict_positions)
+        with self._planning_scene_monitor.read_write() as scene:
+            self._floor_robot.set_start_state_to_current_state()
+            scene.current_state.joint_positions = new_joint_position
+            joint_constraint = construct_joint_constraint(
+                    robot_state=scene.current_state,
+                    joint_model_group=self._ariac_robots.get_robot_model().get_joint_model_group("floor_robot"),
+            )
+            self._floor_robot.set_goal_state(motion_plan_constraints=[joint_constraint])
+        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger())

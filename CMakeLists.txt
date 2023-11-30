@@ -31,6 +31,7 @@ install(PROGRAMS
   scripts/tutorial_6.py
   scripts/tutorial_9.py
   scripts/tutorial_10.py
+  scripts/test_competitor_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
