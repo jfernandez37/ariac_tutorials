@@ -199,7 +199,7 @@ class CompetitionInterface(Node):
             callback_group=self.orders_cb_group)
         
         # Flag for parsing incoming orders
-        self._parse_incoming_order = False
+        self._parse_incoming_order = True
         
         # List of orders
         self._orders = []
@@ -231,6 +231,8 @@ class CompetitionInterface(Node):
         self._ceiling_robot_home_quaternion = Quaternion()
 
         self._planning_scene_monitor = self._ariac_robots.get_planning_scene_monitor()
+
+        self._world_collision_objects = []
 
         # Parts found in the bins
         self._left_bins_parts = []
@@ -743,7 +745,8 @@ class CompetitionInterface(Node):
     
     def _call_get_cartesian_path (self, waypoints : list, 
                                   max_velocity_scaling_factor : float, 
-                                  max_acceleration_scaling_factor : float):
+                                  max_acceleration_scaling_factor : float,
+                                  avoid_collision : bool):
 
         self.get_logger().info("Getting cartesian path")
         self._ariac_robots_state.update()
@@ -760,7 +763,7 @@ class CompetitionInterface(Node):
         request.link_name = "floor_gripper"
         request.waypoints = waypoints
         request.max_step = 0.1
-        request.avoid_collisions = True
+        request.avoid_collisions = avoid_collision
         request.max_velocity_scaling_factor = max_velocity_scaling_factor
         request.max_acceleration_scaling_factor = max_acceleration_scaling_factor
 
@@ -852,15 +855,13 @@ class CompetitionInterface(Node):
         self._ariac_robots_state.update()
         self._ceiling_robot_home_quaternion = self._ariac_robots_state.get_pose("ceiling_gripper").orientation
 
-    def _move_floor_robot_cartesian(self, waypoints, velocity, acceleration):
+    def _move_floor_robot_cartesian(self, waypoints, velocity, acceleration, avoid_collision = True):
         with self._planning_scene_monitor.read_write() as scene:
             # instantiate a RobotState instance using the current robot model
             self._ariac_robots_state = scene.current_state
-            self._ariac_robots_state.update()
-
             # Max step
             self._ariac_robots_state.update()
-            trajectory_msg = self._call_get_cartesian_path(waypoints, velocity, acceleration)
+            trajectory_msg = self._call_get_cartesian_path(waypoints, velocity, acceleration, avoid_collision)
             self._ariac_robots_state.update()
             trajectory = RobotTrajectory(self._ariac_robots.get_robot_model())
             trajectory.set_robot_trajectory_msg(self._ariac_robots_state, trajectory_msg)
@@ -924,6 +925,7 @@ class CompetitionInterface(Node):
         collision_object = self._makeMesh(name, model_pose,model_path, frame_id = frame_id)
         with self._planning_scene_monitor.read_write() as scene:
             scene.apply_collision_object(collision_object)
+            self._world_collision_objects.append(collision_object)
             scene.current_state.update()
     
     def add_objects_to_planning_scene(self):
@@ -985,7 +987,7 @@ class CompetitionInterface(Node):
                                     current_pose.position.z-0.001,
                                     orientation)
             waypoints = [current_pose]
-            self._move_floor_robot_cartesian(waypoints, 0.3, 0.3)
+            self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
             sleep(0.2)
             if time.time()-start_time>=timeout:
                 self.get_logger().error("Unable to pick up part")
@@ -1033,7 +1035,7 @@ class CompetitionInterface(Node):
         waypoints = [build_pose(part_pose.position.x, part_pose.position.y,
                                 part_pose.position.z+CompetitionInterface._part_heights[part_to_pick.type]+0.008,
                                 gripper_orientation)]
-        self._move_floor_robot_cartesian(waypoints, 0.3, 0.3)
+        self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
         self.set_floor_robot_gripper_state(True)
         self._floor_robot_wait_for_attach(30.0, gripper_orientation)
 
@@ -1044,7 +1046,8 @@ class CompetitionInterface(Node):
         waypoints = [build_pose(part_pose.position.x, part_pose.position.y,
                                 part_pose.position.z+0.5,
                                 gripper_orientation)]
-        self._move_floor_robot_cartesian(waypoints, 0.3, 0.3)
+        self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
+        self.get_logger().info("After move up")
     
     def complete_orders(self):
         while len(self._orders) == 0:
@@ -1131,9 +1134,9 @@ class CompetitionInterface(Node):
                                                   tray_pose.position.z+0.5, gripper_orientation))
         
         waypoints = [build_pose(tray_pose.position.x, tray_pose.position.y,
-                                tray_pose.position.z+0.001,
+                                tray_pose.position.z+0.003,
                                 gripper_orientation)]
-        self._move_floor_robot_cartesian(waypoints, 0.3, 0.3)
+        self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
         self.set_floor_robot_gripper_state(True)
         self._floor_robot_wait_for_attach(30.0, gripper_orientation)
         waypoints = [build_pose(tray_pose.position.x, tray_pose.position.y,
@@ -1158,6 +1161,7 @@ class CompetitionInterface(Node):
 
         waypoints = [build_pose(agv_tray_pose.position.x, agv_tray_pose.position.y,
                                 agv_tray_pose.position.z+0.3,quaternion_from_euler(0.0,pi,0.0))]
+        self._move_floor_robot_cartesian(waypoints,0.3,0.3)
 
     
     def _frame_world_pose(self,frame_id : str):
@@ -1194,7 +1198,7 @@ class CompetitionInterface(Node):
                                                   part_drop_pose.position.z+0.3, quaternion_from_euler(0.0, pi, 0.0)))
         
         waypoints = [build_pose(part_drop_pose.position.x, part_drop_pose.position.y,
-                                part_drop_pose.position.z+CompetitionInterface._part_heights[self.floor_robot_attached_part_.type]+0.01, 
+                                part_drop_pose.position.z+CompetitionInterface._part_heights[self.floor_robot_attached_part_.type]+0.004, 
                                 quaternion_from_euler(0.0, pi, 0.0))]
         
         self._move_floor_robot_cartesian(waypoints, 0.3, 0.3)
@@ -1212,6 +1216,8 @@ class CompetitionInterface(Node):
         return True
 
     def _floor_robot_change_gripper(self,station : str, gripper_type : str):
+        self.get_logger().info(f"Changing gripper to type: {gripper_type}")
+
         tc_pose = self._frame_world_pose(f"{station}_tool_changer_{gripper_type}_frame")
 
         self._move_floor_robot_to_pose(build_pose(tc_pose.position.x, tc_pose.position.y,
@@ -1361,7 +1367,7 @@ class CompetitionInterface(Node):
 
         # Check the result of the service call.
         if future.result().success:
-            self.get_logger().info(f'Failed to apply_planning_scene')
+            self.get_logger().info(f'Succssefully applied new planning scene')
         else:
             self.get_logger().warn(future.result().message)
     
@@ -1371,19 +1377,26 @@ class CompetitionInterface(Node):
     def _attach_model_to_floor_gripper(self, part_to_pick : PartMsg, part_pose : Pose):
         part_name = self._part_colors[part_to_pick.color]+"_"+self._part_types[part_to_pick.type]
 
+        self.get_logger().info(f"Attaching {part_name} to floor gripper")
         model_path = self.mesh_file_path + self._part_types[part_to_pick.type]+".stl"
         attached_collision_object = self._makeAttachedMesh(part_name, part_pose,model_path)
         temp_scene = copy(self.planning_scene_msg)
         with self._planning_scene_monitor.read_write() as scene:
-            temp_scene.world.collision_objects = self.planning_scene_msg.world.collision_objects
+            temp_scene.world.collision_objects = self._world_collision_objects
             temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
             temp_scene.robot_state.attached_collision_objects.append(attached_collision_object)
             self.apply_planning_scene(temp_scene)
+            scene.current_state.update()
+            self._ariac_robots_state = scene.current_state
+            
     
     def _remove_model_from_floor_gripper(self):
+        self.get_logger().info("Removing attached part from floor gripper")
         temp_scene = copy(self.planning_scene_msg)
         with self._planning_scene_monitor.read_write() as scene:
-            temp_scene.world.collision_objects = self.planning_scene_msg.world.collision_objects
+            temp_scene.world.collision_objects = self._world_collision_objects
             temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
             temp_scene.robot_state.attached_collision_objects.clear()
             self.apply_planning_scene(temp_scene)
+            scene.current_state.update()
+            self._ariac_robots_state = scene.current_state
