@@ -1,8 +1,10 @@
 from argparse import _MutuallyExclusiveGroup
+from distutils.command import build
 from time import sleep
-from math import pi
+from math import cos, sin, pi
 from copy import copy
 import time
+import PyKDL
 from sympy import Quaternion
 from ament_index_python import get_package_share_directory
 from moveit import MoveItPy, PlanningSceneMonitor
@@ -35,6 +37,7 @@ from ariac_msgs.msg import (
     AssemblyPart as AssemblyPartMsg,
     AGVStatus as AGVStatusMsg,
     AssemblyTask as AssemblyTaskMsg,
+    AssemblyState as AssemblyStateMsg,
     VacuumGripperState,
 )
 
@@ -43,6 +46,7 @@ from ariac_msgs.srv import (
     VacuumGripperControl,
     ChangeGripper,
     SubmitOrder,
+    GetPreAssemblyPoses
 )
 
 from std_srvs.srv import Trigger
@@ -218,14 +222,30 @@ class CompetitionInterface(Node):
             self._floor_robot_gripper_state_cb,
             qos_profile_sensor_data,
             callback_group=self.ariac_cb_group)
+        
+        # Subscriber to the ceiling gripper state topic
+        self._ceiling_robot_gripper_state_sub = self.create_subscription(
+            VacuumGripperState,
+            '/ariac/ceiling_robot_gripper_state',
+            self._ceiling_robot_gripper_state_cb,
+            qos_profile_sensor_data,
+            callback_group=self.ariac_cb_group)
 
         # Service client for turning on/off the vacuum gripper on the floor robot
         self._floor_gripper_enable = self.create_client(
             VacuumGripperControl,
             "/ariac/floor_robot_enable_gripper")
+        
+        # Service client for turning on/off the vacuum gripper on the ceiling robot
+        self._ceiling_gripper_enable = self.create_client(
+            VacuumGripperControl,
+            "/ariac/ceiling_robot_enable_gripper")
 
         # Attribute to store the current state of the floor robot gripper
         self._floor_robot_gripper_state = VacuumGripperState()
+
+        # Attribute to store the current state of the ceiling robot gripper
+        self._ceiling_robot_gripper_state = VacuumGripperState()
 
         # Moveit_py variables
         self._ariac_robots = MoveItPy(node_name="ariac_robots_moveit_py")
@@ -314,6 +334,7 @@ class CompetitionInterface(Node):
         self.static_transforms = []
 
         self.floor_robot_attached_part_ = PartMsg()
+        self.ceiling_robot_attached_part_ = PartMsg()
 
         self._change_gripper_client = self.create_client(ChangeGripper, "/ariac/floor_robot_change_gripper")
         
@@ -344,7 +365,33 @@ class CompetitionInterface(Node):
         self.floor_position_dict = {key:self._create_floor_joint_position_state(self.floor_joint_positions_arrs[key])
                                       for key in self.floor_joint_positions_arrs.keys()}
         
+        #Assembly station info
+        self.assembly_station_states = {}
 
+        as1_state_sub = self.create_subscription(AssemblyStateMsg,
+                                                 "/ariac/assembly_insert_1_assembly_state",
+                                                 self.get_as1_state,
+                                                 qos_profile_sensor_data,
+                                                 callback_group=self.ariac_cb_group)
+        as2_state_sub = self.create_subscription(AssemblyStateMsg,
+                                                 "/ariac/assembly_insert_2_assembly_state",
+                                                 self.get_as2_state,
+                                                 qos_profile_sensor_data,
+                                                 callback_group=self.ariac_cb_group)
+        as3_state_sub = self.create_subscription(AssemblyStateMsg,
+                                                 "/ariac/assembly_insert_3_assembly_state",
+                                                 self.get_as3_state,
+                                                 qos_profile_sensor_data,
+                                                 callback_group=self.ariac_cb_group)
+        as4_state_sub = self.create_subscription(AssemblyStateMsg,
+                                                 "/ariac/assembly_insert_4_assembly_state",
+                                                 self.get_as4_state,
+                                                 qos_profile_sensor_data,
+                                                 callback_group=self.ariac_cb_group)
+
+        self.pre_assembly_poses_getter_ = self.create_client(GetPreAssemblyPoses, "/ariac/get_pre_assembly_poses")
+        
+        self.current_order = None
 
     @property
     def orders(self):
@@ -416,6 +463,14 @@ class CompetitionInterface(Node):
             msg -- VacuumGripperState message
         '''
         self._floor_robot_gripper_state = msg
+    
+    def _ceiling_robot_gripper_state_cb(self, msg: VacuumGripperState):
+        '''Callback for the topic /ariac/floor_ceiling_gripper_state
+
+        Arguments:
+            msg -- VacuumGripperState message
+        '''
+        self._ceiling_robot_gripper_state = msg
 
     def start_competition(self):
         '''Function to start the competition.
@@ -749,6 +804,29 @@ class CompetitionInterface(Node):
         else:
             self.get_logger().warn('Unable to change gripper state')
 
+    def set_ceiling_robot_gripper_state(self, enable):
+        if self._ceiling_robot_gripper_state.enabled == enable:
+            if self._ceiling_robot_gripper_state:
+                self.get_logger().info("Already enabled")
+            else:
+                self.get_logger().info("Already disabled")
+            return
+
+        request = VacuumGripperControl.Request()
+        request.enable = enable
+
+        future = self._ceiling_gripper_enable.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result().success:
+            self.get_logger().info(f'Changed gripper state to {self._gripper_states[enable]}')
+        else:
+            self.get_logger().warn('Unable to change gripper state')
+    
     def wait(self, duration):
         '''Wait for a specified duration.
 
@@ -769,7 +847,8 @@ class CompetitionInterface(Node):
     def _call_get_cartesian_path (self, waypoints : list, 
                                   max_velocity_scaling_factor : float, 
                                   max_acceleration_scaling_factor : float,
-                                  avoid_collision : bool):
+                                  avoid_collision : bool,
+                                  robot : str):
 
         self.get_logger().info("Getting cartesian path")
         self._ariac_robots_state.update()
@@ -782,8 +861,12 @@ class CompetitionInterface(Node):
 
         request.header = header
         request.start_state = robotStateToRobotStateMsg(self._ariac_robots_state)
-        request.group_name = "floor_robot"
-        request.link_name = "floor_gripper"
+        if robot == "floor_robot":
+            request.group_name = "floor_robot"
+            request.link_name = "floor_gripper"
+        else:
+            request.group_name = "ceiling_robot"
+            request.link_name = "ceiling_gripper"
         request.waypoints = waypoints
         request.max_step = 0.1
         request.avoid_collisions = avoid_collision
@@ -886,7 +969,7 @@ class CompetitionInterface(Node):
             self._ariac_robots_state = scene.current_state
             # Max step
             self._ariac_robots_state.update()
-            trajectory_msg = self._call_get_cartesian_path(waypoints, velocity, acceleration, avoid_collision)
+            trajectory_msg = self._call_get_cartesian_path(waypoints, velocity, acceleration, avoid_collision, "floor_robot")
             self._ariac_robots_state.update()
             trajectory = RobotTrajectory(self._ariac_robots.get_robot_model())
             trajectory.set_robot_trajectory_msg(self._ariac_robots_state, trajectory_msg)
@@ -1099,23 +1182,25 @@ class CompetitionInterface(Node):
                     success = True
                     break
 
-            current_order = copy(self._orders[0])
-            current_order : Order
+            self.current_order = copy(self._orders[0])
+            self.current_order : Order
             del self._orders[0]
             kitting_agv_num = -1
 
-            if current_order.order_type== OrderMsg.KITTING:
-                self.complete_kitting_order(current_order.order_task)
-                kitting_agv_num = current_order.order_task.agv_number
+            if self.current_order.order_type == OrderMsg.KITTING:
+                self.complete_kitting_order(self.current_order.order_task)
+                kitting_agv_num = self.current_order.order_task.agv_number
+            elif self.current_order.order_type == OrderMsg.ASSEMBLY:
+                self.complete_assembly_order(self.current_order.order_task)
             else:
-                self.get_logger().info(f"Unable to complete {'assembly' if current_order.order_type == OrderMsg.ASSEMBLY else 'combined'} order")
+                self.get_logger().info("Unable to complete combined order")
                 return False
             agv_location = -1 
             
             while agv_location !=AGVStatusMsg.WAREHOUSE:
                 agv_location = self._agv_locations[kitting_agv_num]
             
-            self.submit_order(current_order.order_id)
+            self.submit_order(self.current_order.order_id)
         return success
 
     def complete_kitting_order(self, kitting_task:KittingTask):
@@ -1350,7 +1435,7 @@ class CompetitionInterface(Node):
         else:
             self.get_logger().warn(future.result().message)  
                     
-    def _makeAttachedMesh(self, name, pose, filename) -> AttachedCollisionObject:
+    def _makeAttachedMesh(self, name, pose, filename, robot) -> AttachedCollisionObject:
         with pyassimp.load(filename) as scene:
             assert len(scene.meshes)
             
@@ -1376,7 +1461,10 @@ class CompetitionInterface(Node):
                 mesh.vertices.append(point)
             
         o = AttachedCollisionObject()
-        o.link_name = "floor_gripper"
+        if robot == "floor_robot":
+            o.link_name = "floor_gripper"
+        else:
+            o.link_name = "ceiling_gripper"
         o.object.header.frame_id = "world"
         o.object.id = name
         o.object.meshes.append(mesh)
@@ -1415,7 +1503,7 @@ class CompetitionInterface(Node):
 
         self.get_logger().info(f"Attaching {part_name} to floor gripper")
         model_path = self.mesh_file_path + self._part_types[part_to_pick.type]+".stl"
-        attached_collision_object = self._makeAttachedMesh(part_name, part_pose,model_path)
+        attached_collision_object = self._makeAttachedMesh(part_name, part_pose,model_path, "floor_robot")
         temp_scene = copy(self.planning_scene_msg)
         with self._planning_scene_monitor.read_write() as scene:
             temp_scene.world.collision_objects = self._world_collision_objects
@@ -1425,7 +1513,6 @@ class CompetitionInterface(Node):
             scene.current_state.update()
             self._ariac_robots_state = scene.current_state
             
-    
     def _remove_model_from_floor_gripper(self):
         self.get_logger().info("Removing attached part from floor gripper")
         temp_scene = copy(self.planning_scene_msg)
@@ -1498,3 +1585,261 @@ class CompetitionInterface(Node):
             )
             self._floor_robot.set_goal_state(motion_plan_constraints=[joint_constraint])
         self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger())
+    
+    def _ceiling_robot_wait_for_attach(self, timeout : float,orientation : Quaternion):
+        with self._planning_scene_monitor.read_write() as scene:
+            current_pose = scene.current_state.get_pose("ceiling_gripper")
+        self.get_logger().info("Got current pose")
+        start_time = time.time()
+        while not self._ceiling_robot_gripper_state.attached:
+            current_pose=build_pose(current_pose.position.x, current_pose.position.y,
+                                    current_pose.position.z-0.001,
+                                    orientation)
+            waypoints = [current_pose]
+            self._move_ceiling_robot_cartesian(waypoints, 0.3, 0.3, False)
+            sleep(0.2)
+            if time.time()-start_time>=timeout:
+                self.get_logger().error("Unable to pick up part")
+            
+    def _move_ceiling_robot_cartesian(self, waypoints, velocity, acceleration, avoid_collision = True):
+        with self._planning_scene_monitor.read_write() as scene:
+            # instantiate a RobotState instance using the current robot model
+            self._ariac_robots_state = scene.current_state
+            self._ariac_robots_state.update()
+            trajectory_msg = self._call_get_cartesian_path(waypoints, velocity, acceleration, avoid_collision, "ceiling_robot")
+            self._ariac_robots_state.update()
+            trajectory = RobotTrajectory(self._ariac_robots.get_robot_model())
+            trajectory.set_robot_trajectory_msg(self._ariac_robots_state, trajectory_msg)
+            trajectory.joint_model_group_name = "ceiling_robot"
+        self._ariac_robots_state.update(True)
+        self._ariac_robots.execute(trajectory, controllers=[])
+    
+    def _ceiling_robot_wait_for_assemble(self, station : int, part : AssemblyPartMsg):
+        start_time = time.time()
+        with self._planning_scene_monitor.read_write() as scene:
+            current_pose = scene.current_state.get_pose("ceiling_gripper")
+        assembled = False
+        while not assembled:
+            if part.part.type == PartMsg.BATTERY:
+                assembled = self.assembly_station_states[station].battery_attached
+            elif part.part.type == PartMsg.PUMP:
+                assembled = self.assembly_station_states[station].pump_attached
+            elif part.part.type == PartMsg.SENSOR:
+                assembled = self.assembly_station_states[station].sensor_attached
+            elif part.part.type == PartMsg.REGULATOR:
+                assembled = self.assembly_station_states[station].regulator_attached
+
+            step = 0.0005
+
+            waypoints = [build_pose(current_pose.position.x+step*part.install_direction.x,
+                                    current_pose.position.y+step*part.install_direction.y,
+                                    current_pose.position.z+step*part.install_direction.z,
+                                    current_pose.orientation)]
+            
+            self._move_ceiling_robot_cartesian(waypoints, 0.01, 0.01, False)
+
+            sleep(0.2)
+
+            if time.time()-start_time>=3:
+                self.get_logger().error("Unable to assemble part")
+                return
+
+            self.get_logger().info("Part is assembled")
+            return True
+    
+    def get_as1_state(self, msg):
+        self.assembly_station_states[1] = msg
+
+    def get_as2_state(self, msg):
+        self.assembly_station_states[2] = msg
+
+    def get_as3_state(self, msg):
+        self.assembly_station_states[3] = msg
+
+    def get_as4_state(self, msg):
+        self.assembly_station_states[4] = msg
+
+    def ceiling_robot_pick_agv_part(self, part : PartPoseMsg):
+        part_rotation = rpy_from_quaternion(part.pose.orientation)[2]
+
+        dx, dy = 0, 0
+
+        if part.part.type == PartMsg.BATTERY:
+            dx = -0.05 * cos(part_rotation)
+            dy = -0.05 * sin(part_rotation)
+
+        waypoints = [build_pose(part.pose.position.x+dx,
+                                part.pose.position.y+dy,
+                                part.pose.position.z + 0.4,
+                                quaternion_from_euler(0.0,pi,part_rotation))]
+        
+        waypoints.append(build_pose(part.pose.position.x + dx,
+                                    part.pose.position.y + dy,
+                                    part.pose.position.z + self._part_heights[part.part.type] + 0.003,
+                                    quaternion_from_euler(0.0,pi,part_rotation)))
+
+        self._move_ceiling_robot_cartesian(waypoints, 0.07, 0.07, True)
+
+        self.set_ceiling_robot_gripper_state(True)
+
+        self._ceiling_robot_wait_for_attach(3.0, quaternion_from_euler(0.0,pi,part_rotation))
+
+        self._attach_model_to_ceiling_gripper(part.part, part.pose)
+
+        self.ceiling_robot_attached_part_ = part.part
+        self.get_logger().info("Part attached")
+
+        with self._planning_scene_monitor.read_write() as scene:
+            current_pose = scene.current_state.get_pose("ceiling_gripper")
+        
+        current_pose.position.z += 0.2
+
+        waypoints = [current_pose]
+        self._move_ceiling_robot_cartesian(waypoints, 0.7,0.7, True)
+
+    def _attach_model_to_ceiling_gripper(self, part_to_pick : PartMsg, part_pose : Pose):
+        part_name = self._part_colors[part_to_pick.color]+"_"+self._part_types[part_to_pick.type]
+
+        self.get_logger().info(f"Attaching {part_name} to ceiling gripper")
+        model_path = self.mesh_file_path + self._part_types[part_to_pick.type]+".stl"
+        attached_collision_object = self._makeAttachedMesh(part_name, part_pose,model_path, "ceiling_robot")
+        temp_scene = copy(self.planning_scene_msg)
+        with self._planning_scene_monitor.read_write() as scene:
+            temp_scene.world.collision_objects = self._world_collision_objects
+            temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
+            temp_scene.robot_state.attached_collision_objects.append(attached_collision_object)
+            self.apply_planning_scene(temp_scene)
+            scene.current_state.update()
+            self._ariac_robots_state = scene.current_state
+            
+    def _remove_model_from_ceiling_gripper(self):
+        self.get_logger().info("Removing attached part from ceiling gripper")
+        temp_scene = copy(self.planning_scene_msg)
+        with self._planning_scene_monitor.read_write() as scene:
+            temp_scene.world.collision_objects = self._world_collision_objects
+            temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
+            temp_scene.robot_state.attached_collision_objects.clear()
+            self.apply_planning_scene(temp_scene)
+            scene.current_state.update()
+            self._ariac_robots_state = scene.current_state
+    
+    def ceiling_robot_assemble_part(self, station : int, part : AssemblyPartMsg):
+        if not self._ceiling_robot_gripper_state.attached:
+            self.get_logger().warn("No part attached")
+            return
+        
+        if part.part != self.ceiling_robot_attached_part_:
+            self.get_logger().warn("Incorrect part attached for this assembly")
+        
+        insert_frame_name = f"as{station}_insert_frame"
+        
+        install = PyKDL.Vector(part.install_direction.x,
+                               part.install_direction.y,
+                               part.install_direction.z)
+
+        insert = self.fromMsg(self._frame_world_pose(insert_frame_name))
+        part_assemble = self.fromMsg(part.assembled_pose.pose)
+
+        waypoints = []
+
+        if part.part.type == PartMsg.BATTERY:
+            part_to_gripper = self.fromMsg(build_pose(-0.005,0,self._part_heights[part.part.type],quaternion_from_euler(pi,0,pi)))
+
+            up = PyKDL.Vector(0,0,0.1)
+            waypoints.append(self.toMsg(insert * PyKDL.Frame(up) * PyKDL.Frame(install * -0.06) * part_assemble * part_to_gripper))
+            waypoints.append(self.toMsg(insert * PyKDL.Frame(install * -0.06) * part_assemble * part_to_gripper))
+        
+        else:
+            part_to_gripper = self.fromMsg(build_pose(0,0,self._part_heights[part.part.type], quaternion_from_euler(pi,0,pi)))
+
+            waypoints.append(self.toMsg(insert * PyKDL.Frame(install * -0.1) * part_assemble * part_to_gripper))
+        
+        self._move_ceiling_robot_cartesian(waypoints, 0.3, 0.3, True)
+
+        waypoints = [self.toMsg(insert * PyKDL.Frame(install * -0.003) * part_assemble * part_to_gripper)]
+        self._move_ceiling_robot_cartesian(waypoints, 0.3, 0.3, True)
+
+        self._ceiling_robot_wait_for_assemble(station, part)
+        self.set_ceiling_robot_gripper_state(False)
+
+        self._remove_model_from_ceiling_gripper()
+
+        with self._planning_scene_monitor.read_write() as scene:
+            current_pose = scene.current_state.get_pose("ceiling_gripper")
+        
+        if part.part.type == PartMsg.REGULATOR:
+            current_pose.position.x -= 0.05
+        else:
+            current_pose.position.z +=0.1
+        
+        waypoints = [current_pose]
+
+        self._move_ceiling_robot_cartesian(waypoints, 0.3, 0.3, True)
+    
+    def complete_assembly_order(self, task : AssemblyTaskMsg):
+        for agv in task.agv_numbers:
+            destination = MoveAGV.Request.ASSEMBLY_FRONT if task.station in [AssemblyTaskMsg.AS1,AssemblyTaskMsg.AS3] else MoveAGV.Request.ASSEMBLY_BACK
+            self.lock_agv_tray(agv)
+            self.move_agv(agv,destination)
+        
+        self.ceiling_robot_move_to_joint_position(f"ceiling_as{task.station}_js_")
+
+        request = GetPreAssemblyPoses.Request()
+        request.order_id = self.current_order.order_id
+
+        future = self.pre_assembly_poses_getter_.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+
+        if future.result().valid_id:
+            agv_part_poses = future.result().parts
+            if len(agv_part_poses)==0:
+                self.get_logger().warn("No part poses recieved")
+                return
+        else:
+            self.get_logger().warn("Not a valid order ID")
+            return
+        
+        for part_to_assemble in task.parts:
+            part_exists = False
+            part_to_pick = PartPoseMsg()
+            part_to_pick.part = part_to_assemble.part
+            for agv_part in agv_part_poses:
+                if agv_part.part.type == part_to_assemble.part.type and agv_part.part.color == part_to_assemble.part.color:
+                    part_exists = True
+                    part_to_pick.pose = agv_part.pose
+                    break
+        
+            if not part_exists:
+                self.get_logger().warn(f"Part with type {self._part_types[part_to_assemble.part.type]} and color {self._part_colors[part_to_assemble.part.color]} not found on tray")
+            else:
+                self.ceiling_robot_pick_agv_part(part_to_pick)
+
+                self.ceiling_robot_move_to_joint_position(f"ceiling_as{task.station}_js_")
+
+                self.ceiling_robot_assemble_part(task.station, part_to_assemble)
+
+                self.ceiling_robot_move_to_joint_position(f"ceiling_as{task.station}_js_")
+
+    def fromMsg(self, pose):
+        o1 = pose.orientation
+        p1 = pose.position
+        return PyKDL.Frame(PyKDL.Rotation.Quaternion(o1.x, o1.y, o1.z, o1.w),
+                           PyKDL.Vector(p1.x, p1.y, p1.z))
+
+    def toMsg(self, frame):
+        pose = Pose()
+        pose.position.x = frame.p.x()
+        pose.position.y = frame.p.y()
+        pose.position.z = frame.p.z()
+
+        q = frame.M.GetQuaternion()
+        pose.orientation.x = q[0]
+        pose.orientation.y = q[1]
+        pose.orientation.z = q[2]
+        pose.orientation.w = q[3]
+
+        return pose
