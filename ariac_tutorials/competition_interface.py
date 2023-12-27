@@ -38,6 +38,7 @@ from ariac_msgs.msg import (
     AGVStatus as AGVStatusMsg,
     AssemblyTask as AssemblyTaskMsg,
     AssemblyState as AssemblyStateMsg,
+    CombinedTask as CombinedTaskMsg,
     VacuumGripperState,
 )
 
@@ -1193,8 +1194,7 @@ class CompetitionInterface(Node):
             elif self.current_order.order_type == OrderMsg.ASSEMBLY:
                 self.complete_assembly_order(self.current_order.order_task)
             else:
-                self.get_logger().info("Unable to complete combined order")
-                return False
+                self.complete_combined_order(self.current_order.order_task)
             agv_location = -1 
             
             while agv_location !=AGVStatusMsg.WAREHOUSE:
@@ -1794,6 +1794,79 @@ class CompetitionInterface(Node):
         except KeyboardInterrupt as kb_error:
             raise KeyboardInterrupt from kb_error
 
+        if future.result().valid_id:
+            agv_part_poses = future.result().parts
+            if len(agv_part_poses)==0:
+                self.get_logger().warn("No part poses recieved")
+                return
+        else:
+            self.get_logger().warn("Not a valid order ID")
+            return
+        
+        for part_to_assemble in task.parts:
+            part_exists = False
+            part_to_pick = PartPoseMsg()
+            part_to_pick.part = part_to_assemble.part
+            for agv_part in agv_part_poses:
+                if agv_part.part.type == part_to_assemble.part.type and agv_part.part.color == part_to_assemble.part.color:
+                    part_exists = True
+                    part_to_pick.pose = agv_part.pose
+                    break
+        
+            if not part_exists:
+                self.get_logger().warn(f"Part with type {self._part_types[part_to_assemble.part.type]} and color {self._part_colors[part_to_assemble.part.color]} not found on tray")
+            else:
+                self.ceiling_robot_pick_agv_part(part_to_pick)
+
+                self.ceiling_robot_move_to_joint_position(f"ceiling_as{task.station}_js_")
+
+                self.ceiling_robot_assemble_part(task.station, part_to_assemble)
+
+                self.ceiling_robot_move_to_joint_position(f"ceiling_as{task.station}_js_")
+        
+    def complete_combined_order(self, task : Combined):
+        if len(self._kts1_trays)!=0:
+            tray_id = self._kts1_trays[0].id
+        elif len(self._kts2_trays)!=0:
+            tray_id = self._kts2_trays[0].id
+        else:
+            self.get_logger().error("No trays available")
+            return
+
+        if task.station in [CombinedTaskMsg.AS1, CombinedTaskMsg.AS2]:
+            agv_number = 1
+        else:
+            agv_number = 4
+        
+        self.MoveAGV(agv_number, MoveAGV.Request.KITTING)
+
+        self._floor_robot_pick_and_place_tray(tray_id, agv_number)
+
+        count = 1
+        for assembly_part in task.parts:
+            self.floor_robot_pick_bin_part(assembly_part.part)
+            self._floor_robot_place_part_on_kit_tray(agv_number, count)
+            count+=1
+        
+        if task.station in [CombinedTaskMsg.AS1, CombinedTaskMsg.AS3]:
+            destination = MoveAGV.Request.ASSEMBLY_FRONT
+        else:
+            destination = MoveAGV.Request.ASSEMBLY_BACK
+        
+        MoveAGV(agv_number, destination)
+
+        self.ceiling_robot_move_to_joint_position(f"ceiling_as{task.station}_js_")
+
+        request = GetPreAssemblyPoses.Request()
+        request.order_id = self.current_order.id
+
+        future = self.pre_assembly_poses_getter_.call_async(request)
+
+        try:
+            rclpy.spin_until_future_complete(self, future)
+        except KeyboardInterrupt as kb_error:
+            raise KeyboardInterrupt from kb_error
+        
         if future.result().valid_id:
             agv_part_poses = future.result().parts
             if len(agv_part_poses)==0:
