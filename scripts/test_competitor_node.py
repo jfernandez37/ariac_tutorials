@@ -23,7 +23,7 @@ def main(args=None):
 
     interface.move_floor_robot_home()
     interface.move_ceiling_robot_home()
-    
+
     interface.complete_orders()
 
     interface.destroy_node()

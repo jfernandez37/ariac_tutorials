@@ -991,6 +991,20 @@ class CompetitionInterface(Node):
         
         while not self._plan_and_execute(self._ariac_robots, self._floor_robot, self.get_logger()):
             pass
+    
+    def _move_ceiling_robot_to_pose(self, pose: Pose):
+        self.get_logger().info(str(pose))
+        with self._planning_scene_monitor.read_write() as scene:
+            self._ceiling_robot.set_start_state_to_current_state()
+
+            pose_goal = PoseStamped()
+            pose_goal.header.frame_id = "world"
+            pose_goal.pose = pose
+            self.get_logger().info(str(pose_goal.pose))
+            self._ceiling_robot.set_goal_state(pose_stamped_msg=pose_goal, pose_link="ceiling_gripper")
+        
+        while not self._plan_and_execute(self._ariac_robots, self._ceiling_robot, self.get_logger()):
+            pass
 
     def _makeMesh(self, name, pose, filename, frame_id) -> CollisionObject:
         with pyassimp.load(filename) as scene:
@@ -1191,14 +1205,13 @@ class CompetitionInterface(Node):
             if self.current_order.order_type == OrderMsg.KITTING:
                 self.complete_kitting_order(self.current_order.order_task)
                 kitting_agv_num = self.current_order.order_task.agv_number
+                agv_location = -1
+                while agv_location !=AGVStatusMsg.WAREHOUSE:
+                    agv_location = self._agv_locations[kitting_agv_num]
             elif self.current_order.order_type == OrderMsg.ASSEMBLY:
                 self.complete_assembly_order(self.current_order.order_task)
             else:
                 self.complete_combined_order(self.current_order.order_task)
-            agv_location = -1 
-            
-            while agv_location !=AGVStatusMsg.WAREHOUSE:
-                agv_location = self._agv_locations[kitting_agv_num]
             
             self.submit_order(self.current_order.order_id)
         return success
@@ -1526,13 +1539,17 @@ class CompetitionInterface(Node):
     
     def ceiling_robot_move_to_joint_position(self, position_name : str):
         with self._planning_scene_monitor.read_write() as scene:
-            self._ceiling_robot.set_start_state_to_current_state()
+            scene.current_state.update()
+            self._ariac_robots_state = scene.current_state
+            
             scene.current_state.joint_positions = self.ceiling_position_dict[position_name]
             joint_constraint = construct_joint_constraint(
                     robot_state=scene.current_state,
                     joint_model_group=self._ariac_robots.get_robot_model().get_joint_model_group("ceiling_robot"),
             )
+            self._ceiling_robot.set_start_state_to_current_state()
             self._ceiling_robot.set_goal_state(motion_plan_constraints=[joint_constraint])
+        self._ariac_robots_state.update(True)
         self._plan_and_execute(self._ariac_robots,self._ceiling_robot, self.get_logger())
     
     def _create_ceiling_joint_position_state(self, joint_positions : list)-> dict:
@@ -1548,13 +1565,19 @@ class CompetitionInterface(Node):
     
     def floor_robot_move_to_joint_position(self, position_name : str):
         with self._planning_scene_monitor.read_write() as scene:
+            self.get_logger().info("Right set start state")
             self._floor_robot.set_start_state_to_current_state()
+            self.get_logger().info("Setting joint states")
             scene.current_state.joint_positions = self.floor_position_dict[position_name]
+            self.get_logger().info("Right before construct joint state")
             joint_constraint = construct_joint_constraint(
                     robot_state=scene.current_state,
                     joint_model_group=self._ariac_robots.get_robot_model().get_joint_model_group("floor_robot"),
             )
+            self.get_logger().info("Right before set goal state")
             self._floor_robot.set_goal_state(motion_plan_constraints=[joint_constraint])
+        self.get_logger().info("Out of with statement")
+        self._ariac_robots_state.update(True)
         self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger())
     
     def _create_floor_joint_position_state(self, joint_positions : list)-> dict:
@@ -1636,7 +1659,7 @@ class CompetitionInterface(Node):
                                     current_pose.position.z+step*part.install_direction.z,
                                     current_pose.orientation)]
             
-            self._move_ceiling_robot_cartesian(waypoints, 0.01, 0.01, False)
+            self._move_ceiling_robot_cartesian(waypoints, 0.05, 0.05, False)
 
             sleep(0.2)
 
@@ -1644,8 +1667,8 @@ class CompetitionInterface(Node):
                 self.get_logger().error("Unable to assemble part")
                 return
 
-            self.get_logger().info("Part is assembled")
-            return True
+        self.get_logger().info("Part is assembled")
+        return True
     
     def get_as1_state(self, msg):
         self.assembly_station_states[1] = msg
@@ -1678,7 +1701,7 @@ class CompetitionInterface(Node):
                                     part.pose.position.z + self._part_heights[part.part.type] + 0.003,
                                     quaternion_from_euler(0.0,pi,part_rotation)))
 
-        self._move_ceiling_robot_cartesian(waypoints, 0.07, 0.07, True)
+        self._move_ceiling_robot_cartesian(waypoints, 0.3, 0.3, True)
 
         self.set_ceiling_robot_gripper_state(True)
 
@@ -1695,7 +1718,8 @@ class CompetitionInterface(Node):
         current_pose.position.z += 0.2
 
         waypoints = [current_pose]
-        self._move_ceiling_robot_cartesian(waypoints, 0.7,0.7, True)
+
+        self._move_ceiling_robot_cartesian(waypoints, 0.3,0.3, False)
 
     def _attach_model_to_ceiling_gripper(self, part_to_pick : PartMsg, part_pose : Pose):
         part_name = self._part_colors[part_to_pick.color]+"_"+self._part_types[part_to_pick.type]
@@ -1732,6 +1756,7 @@ class CompetitionInterface(Node):
             self.get_logger().warn("Incorrect part attached for this assembly")
         
         insert_frame_name = f"as{station}_insert_frame"
+        self.get_logger().info("Insert frame name: "+ insert_frame_name)
         
         install = PyKDL.Vector(part.install_direction.x,
                                part.install_direction.y,
@@ -1754,7 +1779,19 @@ class CompetitionInterface(Node):
 
             waypoints.append(self.toMsg(insert * PyKDL.Frame(install * -0.1) * part_assemble * part_to_gripper))
         
-        self._move_ceiling_robot_cartesian(waypoints, 0.3, 0.3, True)
+
+        self.get_logger().info(str(waypoints[0]))
+        self.get_logger().info("First movement in ceiling_robot assemble part")
+        # self._move_ceiling_robot_to_pose(build_pose(waypoints[-1].position.x,
+        #                                             waypoints[-1].position.y,
+        #                                             waypoints[-1].position.z+0.2,
+        #                                             waypoints[-1].orientation))
+        self._move_ceiling_robot_cartesian([build_pose(waypoints[-1].position.x,
+                                                       waypoints[-1].position.y,
+                                                       waypoints[-1].position.z,
+                                                       waypoints[-1].orientation)], 0.3, 0.3, False)
+
+        sleep(100)
 
         waypoints = [self.toMsg(insert * PyKDL.Frame(install * -0.003) * part_assemble * part_to_gripper)]
         self._move_ceiling_robot_cartesian(waypoints, 0.3, 0.3, True)
@@ -1783,48 +1820,47 @@ class CompetitionInterface(Node):
             self.move_agv(agv,destination)
         
         self.ceiling_robot_move_to_joint_position(f"ceiling_as{task.station}_js_")
+        # request = GetPreAssemblyPoses.Request()
+        # request.order_id = self.current_order.order_id
 
-        request = GetPreAssemblyPoses.Request()
-        request.order_id = self.current_order.order_id
+        # future = self.pre_assembly_poses_getter_.call_async(request)
 
-        future = self.pre_assembly_poses_getter_.call_async(request)
+        # try:
+        #     rclpy.spin_until_future_complete(self, future)
+        # except KeyboardInterrupt as kb_error:
+        #     raise KeyboardInterrupt from kb_error
 
-        try:
-            rclpy.spin_until_future_complete(self, future)
-        except KeyboardInterrupt as kb_error:
-            raise KeyboardInterrupt from kb_error
-
-        if future.result().valid_id:
-            agv_part_poses = future.result().parts
-            if len(agv_part_poses)==0:
-                self.get_logger().warn("No part poses recieved")
-                return
-        else:
-            self.get_logger().warn("Not a valid order ID")
-            return
+        # if future.result().valid_id:
+        #     agv_part_poses = future.result().parts
+        #     if len(agv_part_poses)==0:
+        #         self.get_logger().warn("No part poses recieved")
+        #         return
+        # else:
+        #     self.get_logger().warn("Not a valid order ID")
+        #     return
         
-        for part_to_assemble in task.parts:
-            part_exists = False
-            part_to_pick = PartPoseMsg()
-            part_to_pick.part = part_to_assemble.part
-            for agv_part in agv_part_poses:
-                if agv_part.part.type == part_to_assemble.part.type and agv_part.part.color == part_to_assemble.part.color:
-                    part_exists = True
-                    part_to_pick.pose = agv_part.pose
-                    break
+        # for part_to_assemble in task.parts:
+        #     part_exists = False
+        #     part_to_pick = PartPoseMsg()
+        #     part_to_pick.part = part_to_assemble.part
+        #     for agv_part in agv_part_poses:
+        #         if agv_part.part.type == part_to_assemble.part.type and agv_part.part.color == part_to_assemble.part.color:
+        #             part_exists = True
+        #             part_to_pick.pose = agv_part.pose
+        #             break
         
-            if not part_exists:
-                self.get_logger().warn(f"Part with type {self._part_types[part_to_assemble.part.type]} and color {self._part_colors[part_to_assemble.part.color]} not found on tray")
-            else:
-                self.ceiling_robot_pick_agv_part(part_to_pick)
+        #     if not part_exists:
+        #         self.get_logger().warn(f"Part with type {self._part_types[part_to_assemble.part.type]} and color {self._part_colors[part_to_assemble.part.color]} not found on tray")
+        #     else:
+        #         self.ceiling_robot_pick_agv_part(part_to_pick)
 
-                self.ceiling_robot_move_to_joint_position(f"ceiling_as{task.station}_js_")
+        #         self.ceiling_robot_move_to_joint_position(f"ceiling_as{task.station}_js_")
 
-                self.ceiling_robot_assemble_part(task.station, part_to_assemble)
+        #         self.ceiling_robot_assemble_part(task.station, part_to_assemble)
 
-                self.ceiling_robot_move_to_joint_position(f"ceiling_as{task.station}_js_")
+        #         self.ceiling_robot_move_to_joint_position(f"ceiling_as{task.station}_js_")
         
-    def complete_combined_order(self, task : Combined):
+    def complete_combined_order(self, task : CombinedTaskMsg):
         if len(self._kts1_trays)!=0:
             tray_id = self._kts1_trays[0].id
         elif len(self._kts2_trays)!=0:
