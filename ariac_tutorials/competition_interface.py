@@ -920,6 +920,7 @@ class CompetitionInterface(Node):
         robot,
         planning_component,
         logger,
+        robot_type,
         single_plan_parameters=None,
         multi_plan_parameters=None,
         sleep_time=0.0,
@@ -940,27 +941,27 @@ class CompetitionInterface(Node):
         # execute the plan
         if plan_result:
             logger.info("Executing plan")
-            robot_trajectory = plan_result.trajectory
-            logger.info(str(robot_trajectory.joint_model_group_name))
-            robot.execute(robot_trajectory, controllers=[])
+            with self._planning_scene_monitor.read_write() as scene:
+                scene.current_state.update(True)
+                self._ariac_robots_state = scene.current_state
+                robot_trajectory = plan_result.trajectory
+            robot.execute(robot_trajectory, controllers=["floor_robot_controller","linear_rail_controller"] if robot_type=="floor_robot" else ["ceiling_robot_controller","gantry_controller"])
         else:
             logger.error("Planning failed")
             return False
-
-        sleep(sleep_time)
         return True
 
     def move_floor_robot_home(self):
         self._floor_robot.set_start_state_to_current_state()
         self._floor_robot.set_goal_state(configuration_name="home")
-        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger(), sleep_time=0.0)
+        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger(),"floor_robot", sleep_time=0.0)
         self._ariac_robots_state.update()
         self._floor_robot_home_quaternion = self._ariac_robots_state.get_pose("floor_gripper").orientation
     
     def move_ceiling_robot_home(self):
         self._ceiling_robot.set_start_state_to_current_state()
         self._ceiling_robot.set_goal_state(configuration_name="home")
-        self._plan_and_execute(self._ariac_robots,self._ceiling_robot, self.get_logger(), sleep_time=0.0)
+        self._plan_and_execute(self._ariac_robots,self._ceiling_robot, self.get_logger(),"ceiling_robot", sleep_time=0.0)
         self._ariac_robots_state.update()
         self._ceiling_robot_home_quaternion = self._ariac_robots_state.get_pose("ceiling_gripper").orientation
 
@@ -989,7 +990,7 @@ class CompetitionInterface(Node):
             self.get_logger().info(str(pose_goal.pose))
             self._floor_robot.set_goal_state(pose_stamped_msg=pose_goal, pose_link="floor_gripper")
         
-        while not self._plan_and_execute(self._ariac_robots, self._floor_robot, self.get_logger()):
+        while not self._plan_and_execute(self._ariac_robots, self._floor_robot, self.get_logger(), "floor_robot"):
             pass
     
     def _move_ceiling_robot_to_pose(self, pose: Pose):
@@ -1003,7 +1004,7 @@ class CompetitionInterface(Node):
             self.get_logger().info(str(pose_goal.pose))
             self._ceiling_robot.set_goal_state(pose_stamped_msg=pose_goal, pose_link="ceiling_gripper")
         
-        while not self._plan_and_execute(self._ariac_robots, self._ceiling_robot, self.get_logger()):
+        while not self._plan_and_execute(self._ariac_robots, self._ceiling_robot, self.get_logger(), "ceiling_robot"):
             pass
 
     def _makeMesh(self, name, pose, filename, frame_id) -> CollisionObject:
@@ -1219,13 +1220,18 @@ class CompetitionInterface(Node):
     def complete_kitting_order(self, kitting_task:KittingTask):
         self.move_floor_robot_home()
 
-        self._floor_robot_pick_and_place_tray(kitting_task._tray_id, kitting_task._agv_number)
+        # for i in range(3):
+        #     self.ceiling_robot_move_to_joint_position(f"ceiling_as{1}_js_")
 
-        for kitting_part in kitting_task._parts:
-            self.floor_robot_pick_bin_part(kitting_part._part)
-            self._floor_robot_place_part_on_kit_tray(kitting_task._agv_number, kitting_part.quadrant)
+        self.floor_robot_move_to_joint_position("floor_kts2_js_")
+        self.get_logger().info("THIS IS A TEST")
+        # self._floor_robot_pick_and_place_tray(kitting_task._tray_id, kitting_task._agv_number)
+
+        # for kitting_part in kitting_task._parts:
+        #     self.floor_robot_pick_bin_part(kitting_part._part)
+        #     self._floor_robot_place_part_on_kit_tray(kitting_task._agv_number, kitting_part.quadrant)
         
-        self.move_agv(kitting_task._agv_number, kitting_task._destination)
+        # self.move_agv(kitting_task._agv_number, kitting_task._destination)
 
     def _floor_robot_pick_and_place_tray(self, tray_id, agv_number):
         tray_pose = Pose
@@ -1550,7 +1556,7 @@ class CompetitionInterface(Node):
             self._ceiling_robot.set_start_state_to_current_state()
             self._ceiling_robot.set_goal_state(motion_plan_constraints=[joint_constraint])
         self._ariac_robots_state.update(True)
-        self._plan_and_execute(self._ariac_robots,self._ceiling_robot, self.get_logger())
+        self._plan_and_execute(self._ariac_robots,self._ceiling_robot, self.get_logger(), "ceiling_robot")
     
     def _create_ceiling_joint_position_state(self, joint_positions : list)-> dict:
         return {"gantry_x_axis_joint":joint_positions[0],
@@ -1578,8 +1584,8 @@ class CompetitionInterface(Node):
             self._floor_robot.set_goal_state(motion_plan_constraints=[joint_constraint])
         self.get_logger().info("Out of with statement")
         self._ariac_robots_state.update(True)
-        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger())
-    
+        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger(), robot_type="floor_robot")
+  
     def _create_floor_joint_position_state(self, joint_positions : list)-> dict:
         return {"linear_actuator_joint":joint_positions[0],
                 "floor_shoulder_pan_joint":joint_positions[1],
@@ -1607,7 +1613,7 @@ class CompetitionInterface(Node):
                     joint_model_group=self._ariac_robots.get_robot_model().get_joint_model_group("floor_robot"),
             )
             self._floor_robot.set_goal_state(motion_plan_constraints=[joint_constraint])
-        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger())
+        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger(), "floor_robot")
     
     def _ceiling_robot_wait_for_attach(self, timeout : float,orientation : Quaternion):
         with self._planning_scene_monitor.read_write() as scene:
@@ -1782,10 +1788,6 @@ class CompetitionInterface(Node):
 
         self.get_logger().info(str(waypoints[0]))
         self.get_logger().info("First movement in ceiling_robot assemble part")
-        # self._move_ceiling_robot_to_pose(build_pose(waypoints[-1].position.x,
-        #                                             waypoints[-1].position.y,
-        #                                             waypoints[-1].position.z+0.2,
-        #                                             waypoints[-1].orientation))
         self._move_ceiling_robot_cartesian([build_pose(waypoints[-1].position.x,
                                                        waypoints[-1].position.y,
                                                        waypoints[-1].position.z,
