@@ -19,10 +19,11 @@ def main(args=None):
     spin_thread = threading.Thread(target=executor.spin)
     spin_thread.start()
     
-    interface.start_competition()
-
     interface.move_floor_robot_home()
     interface.move_ceiling_robot_home()
+
+    interface.start_competition()
+ 
 
     interface.complete_orders()
 
