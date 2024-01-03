@@ -1655,7 +1655,7 @@ class CompetitionInterface(Node):
             elif part.part.type == PartMsg.REGULATOR:
                 assembled = self.assembly_station_states[station].regulator_attached
 
-            step = 0.0005
+            step = 0.0025
 
             waypoints = [build_pose(current_pose.position.x+step*part.install_direction.x,
                                     current_pose.position.y+step*part.install_direction.y,
@@ -1792,6 +1792,7 @@ class CompetitionInterface(Node):
                                                        waypoints[-1].position.y,
                                                        waypoints[-1].position.z,
                                                        waypoints[-1].orientation)], 0.3, 0.3, False)
+        
         self._ceiling_robot_wait_for_assemble(station, part)
         self.set_ceiling_robot_gripper_state(False)
 
