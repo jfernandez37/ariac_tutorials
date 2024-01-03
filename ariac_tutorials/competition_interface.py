@@ -1655,7 +1655,7 @@ class CompetitionInterface(Node):
             elif part.part.type == PartMsg.REGULATOR:
                 assembled = self.assembly_station_states[station].regulator_attached
 
-            step = 0.0025
+            step = 0.00325
 
             waypoints = [build_pose(current_pose.position.x+step*part.install_direction.x,
                                     current_pose.position.y+step*part.install_direction.y,
