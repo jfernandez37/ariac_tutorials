@@ -301,10 +301,7 @@ class CompetitionInterface(Node):
                                                          callback_group=self.moveit_cb_group)
         
         # AGV status subs
-        self._agv_locations = {1 : -1,
-                               2 : -1,
-                               3 : -1,
-                               4 : -1}
+        self._agv_locations = {i+1:-1 for i in range(4)}
         
         self.agv1_status_sub = self.create_subscription(AGVStatusMsg,
                                                         "/ariac/agv1_status",
@@ -1214,9 +1211,8 @@ class CompetitionInterface(Node):
                 self.complete_kitting_order(self.current_order.order_task)
                 kitting_agv_num = self.current_order.order_task.agv_number
                 agv_location = -1
-                while agv_location !=AGVStatusMsg.WAREHOUSE:
-                    self.get_logger().info("In while loop")
-                    agv_location = self._agv_locations[kitting_agv_num]
+                # while agv_location !=AGVStatusMsg.WAREHOUSE:
+                #     agv_location = self._agv_locations[kitting_agv_num]
             elif self.current_order.order_type == OrderMsg.ASSEMBLY:
                 self.complete_assembly_order(self.current_order.order_task)
             else:
