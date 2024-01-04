@@ -1771,7 +1771,7 @@ class CompetitionInterface(Node):
         waypoints = []
 
         if part.part.type == PartMsg.BATTERY:
-            part_to_gripper = self.fromMsg(build_pose(-0.005,0,self._part_heights[part.part.type],quaternion_from_euler(pi,0,pi)))
+            part_to_gripper = self.fromMsg(build_pose(-0.05,0,self._part_heights[part.part.type],quaternion_from_euler(pi,0,pi)))
 
             up = PyKDL.Vector(0,0,0.1)
             waypoints.append(self.toMsg(insert * PyKDL.Frame(up) * PyKDL.Frame(install * -0.06) * part_assemble * part_to_gripper))
@@ -1784,14 +1784,14 @@ class CompetitionInterface(Node):
         
 
         
-        self.get_logger().info("First movement in ceiling_robot assemble part")
         self._move_ceiling_robot_cartesian(waypoints, 0.3, 0.3, False)
-
-        waypoints = [self.toMsg(insert * PyKDL.Frame(install * -0.003) * part_assemble * part_to_gripper)]
+        sleep(1)
+        
+        waypoints = [self.toMsg(insert * PyKDL.Frame(install * (-0.0005 if part.part.type == PartMsg.SENSOR else -0.0075)) * part_assemble * part_to_gripper)]
         self._move_ceiling_robot_cartesian([build_pose(waypoints[-1].position.x,
-                                                       waypoints[-1].position.y,
-                                                       waypoints[-1].position.z,
-                                                       waypoints[-1].orientation)], 0.3, 0.3, False)
+                                                    waypoints[-1].position.y,
+                                                    waypoints[-1].position.z,
+                                                    waypoints[-1].orientation)], 0.3, 0.3, False)
         
         self._ceiling_robot_wait_for_assemble(station, part)
         self.set_ceiling_robot_gripper_state(False)
