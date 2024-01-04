@@ -21,6 +21,8 @@ def main(args=None):
     
     interface.start_competition()
     
+    interface.move_floor_robot_home()
+
     interface.complete_orders()
 
     interface.destroy_node()
