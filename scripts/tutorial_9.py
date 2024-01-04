@@ -2,7 +2,7 @@
 '''
 To test this script, run the following commands in separate terminals:
 - ros2 launch ariac_gazebo ariac.launch.py trial_name:=tutorial competitor_pkg:=ariac_tutorials
-- ros2 run ariac_tutorials tutorial_9.py
+- ros2 launch ariac_tutorials tutorial9.launch.py
 '''
 
 import rclpy
