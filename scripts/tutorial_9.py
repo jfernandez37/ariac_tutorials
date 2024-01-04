@@ -18,8 +18,8 @@ def main(args=None):
     interface.get_logger().info("Competition started. Adding collision objects to planning scene")
 
     part_to_pick = Part()
-    part_to_pick.type = Part.PUMP
-    part_to_pick.color = Part.PURPLE
+    part_to_pick.type = Part.BATTERY
+    part_to_pick.color = Part.BLUE
 
     interface.add_objects_to_planning_scene()
     interface.move_floor_robot_home()
