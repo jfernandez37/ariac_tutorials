@@ -1302,7 +1302,7 @@ class CompetitionInterface(Node):
                                 part_drop_pose.position.z+CompetitionInterface._part_heights[self.floor_robot_attached_part_.type]+0.01, 
                                 quaternion_from_euler(0.0, pi, 0.0))]
         
-        self._move_floor_robot_cartesian(waypoints, 0.3, 0.3,)
+        self._move_floor_robot_cartesian(waypoints, 0.3, 0.3,False)
 
         self.set_floor_robot_gripper_state(False)
 
@@ -1312,7 +1312,7 @@ class CompetitionInterface(Node):
                                 part_drop_pose.position.z+0.3, 
                                 quaternion_from_euler(0.0, pi, 0.0))]
         
-        self._move_floor_robot_cartesian(waypoints, 0.3, 0.3)
+        self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
 
         return True
 
