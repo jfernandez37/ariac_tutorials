@@ -358,8 +358,13 @@ class CompetitionInterface(Node):
         
         self.floor_joint_positions_arrs = {
             "floor_kts1_js_":[4.0,1.57,-1.57,1.57,-1.57,-1.57,0.0],
-            "floor_kts2_js_":[-4.0,-1.57,-1.57,1.57,-1.57,-1.57,0.0]
+            "floor_kts2_js_":[-4.0,-1.57,-1.57,1.57,-1.57,-1.57,0.0],
+            "left_bins":[3.0,0.0,-1.57,1.57,-1.57,-1.57,0.0],
+            "right_bins":[-3.0,0.0,-1.57,1.57,-1.57,-1.57,0.0]
         }
+        for i in range(1,5):
+            self.floor_joint_positions_arrs[f"agv{i}"]=[self._rail_positions[f"agv{i}"],0.0,-1.57,1.57,-1.57,-1.57,0.0]
+            
         self.floor_position_dict = {key:self._create_floor_joint_position_state(self.floor_joint_positions_arrs[key])
                                       for key in self.floor_joint_positions_arrs.keys()}
         
@@ -1111,14 +1116,17 @@ class CompetitionInterface(Node):
         self.get_logger().info("Got current pose")
         start_time = time.time()
         while not self._floor_robot_gripper_state.attached:
-            current_pose=build_pose(current_pose.position.x, current_pose.position.y,
-                                    current_pose.position.z-0.001,
-                                    orientation)
-            waypoints = [current_pose]
-            self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
             sleep(0.2)
             if time.time()-start_time>=timeout:
                 self.get_logger().error("Unable to pick up part")
+                return
+            current_pose=build_pose(current_pose.position.x, current_pose.position.y,
+                                    current_pose.position.z-0.0005,
+                                    orientation)
+            waypoints = [current_pose]
+            self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
+            
+        self.get_logger().info("Attached to part")
 
     def floor_robot_pick_bin_part(self,part_to_pick : PartMsg):
         part_pose = Pose()
@@ -1144,6 +1152,7 @@ class CompetitionInterface(Node):
         
         if not found_part:
             self.get_logger().error("Unable to locate part")
+            return
         else:
             self.get_logger().info(f"Part found in {bin_side}")
 
@@ -1154,8 +1163,8 @@ class CompetitionInterface(Node):
                 station = "kts2"
             self.floor_robot_move_to_joint_position(f"floor_{station}_js_")
             self._floor_robot_change_gripper(station, "parts")
-        self.floor_robot_move_joints_dict({"linear_actuator_joint":self._rail_positions[bin_side],
-                                       "floor_shoulder_pan_joint":0})
+            
+        self.floor_robot_move_to_joint_position(bin_side)
         part_rotation = rpy_from_quaternion(part_pose.orientation)[2]
         
         gripper_orientation = quaternion_from_euler(0.0,pi,part_rotation)
@@ -1168,7 +1177,10 @@ class CompetitionInterface(Node):
         self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
         self.set_floor_robot_gripper_state(True)
         self._floor_robot_wait_for_attach(30.0, gripper_orientation)
-
+        
+        
+        self.floor_robot_move_to_joint_position(bin_side)
+        self.get_logger().info("After movement up")
         self._attach_model_to_floor_gripper(part_to_pick, part_pose)
 
         self.floor_robot_attached_part_ = part_to_pick
@@ -1177,10 +1189,10 @@ class CompetitionInterface(Node):
                                 part_pose.position.z+0.5,
                                 gripper_orientation)]
         self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
+        
         self.get_logger().info("After move up")
     
     def complete_orders(self):
-        
         while len(self._orders) == 0:
             self.get_logger().info("No orders have been recieved yet", throttle_duration_sec=5.0)
 
@@ -1270,13 +1282,14 @@ class CompetitionInterface(Node):
         self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
         self.set_floor_robot_gripper_state(True)
         self._floor_robot_wait_for_attach(30.0, gripper_orientation)
+                
         waypoints = [build_pose(tray_pose.position.x, tray_pose.position.y,
                                 tray_pose.position.z+0.5,
                                 gripper_orientation)]
-        self._move_floor_robot_cartesian(waypoints, 0.3, 0.3)
+        self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
 
-        self.floor_robot_move_joints_dict({"linear_actuator_joint":self._rail_positions[f"agv{agv_number}"],
-                                       "floor_shoulder_pan_joint":0})
+        # self.floor_robot_move_joints_dict({"linear_actuator_joint":self._rail_positions[f"agv{agv_number}"],
+        #                                "floor_shoulder_pan_joint":0})
 
         agv_tray_pose = self._frame_world_pose(f"agv{agv_number}_tray")
         agv_rotation = rpy_from_quaternion(agv_tray_pose.orientation)[2]
@@ -1323,6 +1336,8 @@ class CompetitionInterface(Node):
         # self.floor_robot_move_joints_dict({"linear_actuator_joint":self._rail_positions[f"agv{agv_num}"],
         #                                "floor_shoulder_pan_joint":0})
         
+        self.floor_robot_move_to_joint_position(f"agv{agv_num}")
+        
         agv_tray_pose = self._frame_world_pose(f"agv{agv_num}_tray")
 
         part_drop_offset = build_pose(CompetitionInterface._quad_offsets[quadrant][0],
@@ -1335,7 +1350,7 @@ class CompetitionInterface(Node):
                                                   part_drop_pose.position.z+0.3, quaternion_from_euler(0.0, pi, 0.0)))
         
         waypoints = [build_pose(part_drop_pose.position.x, part_drop_pose.position.y,
-                                part_drop_pose.position.z+CompetitionInterface._part_heights[self.floor_robot_attached_part_.type]+0.01, 
+                                part_drop_pose.position.z+CompetitionInterface._part_heights[self.floor_robot_attached_part_.type]+0.025, 
                                 quaternion_from_euler(0.0, pi, 0.0))]
         
         self._move_floor_robot_cartesian(waypoints, 0.3, 0.3,False)
@@ -1568,18 +1583,13 @@ class CompetitionInterface(Node):
     
     def floor_robot_move_to_joint_position(self, position_name : str):
         with self._planning_scene_monitor.read_write() as scene:
-            self.get_logger().info("Right set start state")
             self._floor_robot.set_start_state(robot_state=scene.current_state)
-            self.get_logger().info("Setting joint states")
             scene.current_state.joint_positions = self.floor_position_dict[position_name]
-            self.get_logger().info("Right before construct joint state")
             joint_constraint = construct_joint_constraint(
                     robot_state=scene.current_state,
                     joint_model_group=self._ariac_robots.get_robot_model().get_joint_model_group("floor_robot"),
             )
-            self.get_logger().info("Right before set goal state")
             self._floor_robot.set_goal_state(motion_plan_constraints=[joint_constraint])
-        self.get_logger().info("Out of with statement")
         self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger(), robot_type="floor_robot")
   
     def _create_floor_joint_position_state(self, joint_positions : list)-> dict:
@@ -1617,14 +1627,16 @@ class CompetitionInterface(Node):
         self.get_logger().info("Got current pose")
         start_time = time.time()
         while not self._ceiling_robot_gripper_state.attached:
+            sleep(0.2)
+            if time.time()-start_time>=timeout:
+                self.get_logger().error("Unable to pick up part")
+                return
             current_pose=build_pose(current_pose.position.x, current_pose.position.y,
                                     current_pose.position.z-0.001,
                                     orientation)
             waypoints = [current_pose]
             self._move_ceiling_robot_cartesian(waypoints, 0.3, 0.3, False)
-            sleep(0.2)
-            if time.time()-start_time>=timeout:
-                self.get_logger().error("Unable to pick up part")
+            
             
     def _move_ceiling_robot_cartesian(self, waypoints, velocity, acceleration, avoid_collision = True):
         with self._planning_scene_monitor.read_write() as scene:
@@ -1874,7 +1886,7 @@ class CompetitionInterface(Node):
         else:
             agv_number = 4
         
-        self.MoveAGV(agv_number, MoveAGV.Request.KITTING)
+        self.move_agv(agv_number, MoveAGV.Request.KITTING)
 
         self._floor_robot_pick_and_place_tray(tray_id, agv_number)
 
@@ -1889,12 +1901,12 @@ class CompetitionInterface(Node):
         else:
             destination = MoveAGV.Request.ASSEMBLY_BACK
         
-        MoveAGV(agv_number, destination)
+        self.move_agv(agv_number, destination)
 
         self.ceiling_robot_move_to_joint_position(f"ceiling_as{task.station}_js_")
 
         request = GetPreAssemblyPoses.Request()
-        request.order_id = self.current_order.id
+        request.order_id = self.current_order.order_id
 
         future = self.pre_assembly_poses_getter_.call_async(request)
 
