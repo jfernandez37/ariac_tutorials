@@ -1799,7 +1799,7 @@ class CompetitionInterface(Node):
         self._move_ceiling_robot_cartesian(waypoints, 0.3, 0.3, False)
         sleep(1)
         
-        waypoints = [self.toMsg(insert * PyKDL.Frame(install * (-0.0005 if part.part.type == PartMsg.SENSOR else -0.0075)) * part_assemble * part_to_gripper)]
+        waypoints = [self.toMsg(insert * PyKDL.Frame(install * (0.0005 if part.part.type == PartMsg.SENSOR else -0.005)) * part_assemble * part_to_gripper)]
         self._move_ceiling_robot_cartesian([build_pose(waypoints[-1].position.x,
                                                     waypoints[-1].position.y,
                                                     waypoints[-1].position.z,
