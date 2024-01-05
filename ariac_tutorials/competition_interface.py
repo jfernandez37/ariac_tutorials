@@ -46,8 +46,7 @@ from ariac_msgs.srv import (
     MoveAGV,
     VacuumGripperControl,
     ChangeGripper,
-    SubmitOrder,
-    GetPreAssemblyPoses
+    SubmitOrder
 )
 
 from std_srvs.srv import Trigger
@@ -329,7 +328,6 @@ class CompetitionInterface(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.tf_broadcaster = StaticTransformBroadcaster(self)
-        self.static_transforms = []
 
         self.floor_robot_attached_part_ = PartMsg()
         self.ceiling_robot_attached_part_ = PartMsg()
