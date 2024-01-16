@@ -495,7 +495,7 @@ class CompetitionInterface(Node):
         # Check if service is available
         if not self._start_competition_client.wait_for_service(timeout_sec=3.0):
             self.get_logger().error('Service \'/ariac/start_competition\' is not available.')
-            return
+            return False
 
         # Create trigger request and call starter service
         request = Trigger.Request()
@@ -790,7 +790,7 @@ class CompetitionInterface(Node):
         '''
         if self._floor_robot_gripper_state.enabled == state:
             self.get_logger().warn(f'Gripper is already {self._gripper_states[state]}')
-            return
+            return False
 
         request = VacuumGripperControl.Request()
         request.enable = state
@@ -804,8 +804,10 @@ class CompetitionInterface(Node):
 
         if future.result().success:
             self.get_logger().info(f'Changed gripper state to {self._gripper_states[state]}')
+            return True
         else:
             self.get_logger().warn('Unable to change gripper state')
+            return False
 
     def set_ceiling_robot_gripper_state(self, enable):
         if self._ceiling_robot_gripper_state.enabled == enable:
@@ -813,7 +815,7 @@ class CompetitionInterface(Node):
                 self.get_logger().info("Already enabled")
             else:
                 self.get_logger().info("Already disabled")
-            return
+            return False
 
         request = VacuumGripperControl.Request()
         request.enable = enable
@@ -827,8 +829,10 @@ class CompetitionInterface(Node):
 
         if future.result().success:
             self.get_logger().info(f'Changed gripper state to {self._gripper_states[enable]}')
+            return True
         else:
             self.get_logger().warn('Unable to change gripper state')
+            return False
     
     def wait(self, duration):
         '''Wait for a specified duration.
@@ -1062,6 +1066,9 @@ class CompetitionInterface(Node):
             scene.current_state.update()
     
     def add_objects_to_planning_scene(self):
+        '''
+        Goes through the collsion_object_info.yaml and adds the objects to the planning scene
+        '''
         package_share_directory = get_package_share_directory("ariac_tutorials")
         with open(package_share_directory+"/config/collision_object_info.yaml",'r') as object_file:
             objects_dict = yaml.safe_load(object_file)
@@ -1119,7 +1126,7 @@ class CompetitionInterface(Node):
             sleep(0.2)
             if time.time()-start_time>=timeout:
                 self.get_logger().error("Unable to pick up part")
-                return
+                return False
             current_pose=build_pose(current_pose.position.x, current_pose.position.y,
                                     current_pose.position.z-0.0005,
                                     orientation)
@@ -1127,6 +1134,7 @@ class CompetitionInterface(Node):
             self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
             
         self.get_logger().info("Attached to part")
+        return True
 
     def floor_robot_pick_bin_part(self,part_to_pick : PartMsg):
         part_pose = Pose()
@@ -1152,7 +1160,7 @@ class CompetitionInterface(Node):
         
         if not found_part:
             self.get_logger().error("Unable to locate part")
-            return
+            return False
         else:
             self.get_logger().info(f"Part found in {bin_side}")
 
@@ -1176,7 +1184,7 @@ class CompetitionInterface(Node):
                                 gripper_orientation)]
         self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
         self.set_floor_robot_gripper_state(True)
-        self._floor_robot_wait_for_attach(30.0, gripper_orientation)
+        self._floor_robot_wait_for_attach(5.0, gripper_orientation)
         
         
         self.floor_robot_move_to_joint_position(bin_side)
@@ -1191,6 +1199,8 @@ class CompetitionInterface(Node):
         self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
         
         self.get_logger().info("After move up")
+
+        return True
     
     def complete_orders(self):
         while len(self._orders) == 0:
@@ -1237,7 +1247,7 @@ class CompetitionInterface(Node):
         self._floor_robot_pick_and_place_tray(kitting_task._tray_id, kitting_task._agv_number)
 
         for kitting_part in kitting_task._parts:
-            self.floor_robot_pick_bin_part(kitting_part._part)
+            found = self.floor_robot_pick_bin_part(kitting_part._part)
             self._floor_robot_place_part_on_kit_tray(kitting_task._agv_number, kitting_part.quadrant)
         
         self.move_agv(kitting_task._agv_number, kitting_task._destination)
@@ -1281,7 +1291,7 @@ class CompetitionInterface(Node):
                                 gripper_orientation)]
         self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
         self.set_floor_robot_gripper_state(True)
-        self._floor_robot_wait_for_attach(30.0, gripper_orientation)
+        self._floor_robot_wait_for_attach(5.0, gripper_orientation)
                 
         waypoints = [build_pose(tray_pose.position.x, tray_pose.position.y,
                                 tray_pose.position.z+0.5,
@@ -1630,12 +1640,13 @@ class CompetitionInterface(Node):
             sleep(0.2)
             if time.time()-start_time>=timeout:
                 self.get_logger().error("Unable to pick up part")
-                return
+                return False
             current_pose=build_pose(current_pose.position.x, current_pose.position.y,
                                     current_pose.position.z-0.001,
                                     orientation)
             waypoints = [current_pose]
             self._move_ceiling_robot_cartesian(waypoints, 0.3, 0.3, False)
+        return True
             
             
     def _move_ceiling_robot_cartesian(self, waypoints, velocity, acceleration, avoid_collision = True):
@@ -1680,7 +1691,7 @@ class CompetitionInterface(Node):
 
             if time.time()-start_time>=3:
                 self.get_logger().error("Unable to assemble part")
-                return
+                return False
 
         self.get_logger().info("Part is assembled")
         return True
@@ -1765,7 +1776,7 @@ class CompetitionInterface(Node):
     def ceiling_robot_assemble_part(self, station : int, part : AssemblyPartMsg):
         if not self._ceiling_robot_gripper_state.attached:
             self.get_logger().warn("No part attached")
-            return
+            return False
         
         if part.part != self.ceiling_robot_attached_part_:
             self.get_logger().warn("Incorrect part attached for this assembly")
@@ -1820,10 +1831,9 @@ class CompetitionInterface(Node):
         
         waypoints = [current_pose]
 
-        self._move_ceiling_robot_cartesian([build_pose(waypoints[-1].position.x,
-                                                       waypoints[-1].position.y,
-                                                       waypoints[-1].position.z,
-                                                       waypoints[-1].orientation)], 0.3, 0.3, False)
+        self._move_ceiling_robot_cartesian(waypoints, 0.3, 0.3, False)
+
+        return True
     
     def complete_assembly_order(self, task : AssemblyTaskMsg):
         for agv in task.agv_numbers:
@@ -1846,10 +1856,10 @@ class CompetitionInterface(Node):
             agv_part_poses = future.result().parts
             if len(agv_part_poses)==0:
                 self.get_logger().warn("No part poses recieved")
-                return
+                return False
         else:
             self.get_logger().warn("Not a valid order ID")
-            return
+            return False
         
         for part_to_assemble in task.parts:
             part_exists = False
@@ -1871,6 +1881,7 @@ class CompetitionInterface(Node):
                 self.ceiling_robot_assemble_part(task.station, part_to_assemble)
 
                 self.ceiling_robot_move_to_joint_position(f"ceiling_as{task.station}_js_")
+        return True
         
     def complete_combined_order(self, task : CombinedTaskMsg):
         if len(self._kts1_trays)!=0:
@@ -1879,7 +1890,7 @@ class CompetitionInterface(Node):
             tray_id = self._kts2_trays[0].id
         else:
             self.get_logger().error("No trays available")
-            return
+            return False
 
         if task.station in [CombinedTaskMsg.AS1, CombinedTaskMsg.AS2]:
             agv_number = 1
@@ -1892,7 +1903,7 @@ class CompetitionInterface(Node):
 
         count = 1
         for assembly_part in task.parts:
-            self.floor_robot_pick_bin_part(assembly_part.part)
+            found = self.floor_robot_pick_bin_part(assembly_part.part)
             self._floor_robot_place_part_on_kit_tray(agv_number, count)
             count+=1
         
@@ -1919,10 +1930,10 @@ class CompetitionInterface(Node):
             agv_part_poses = future.result().parts
             if len(agv_part_poses)==0:
                 self.get_logger().warn("No part poses recieved")
-                return
+                return False
         else:
             self.get_logger().warn("Not a valid order ID")
-            return
+            return False
         
         for part_to_assemble in task.parts:
             part_exists = False
@@ -1944,6 +1955,8 @@ class CompetitionInterface(Node):
                 self.ceiling_robot_assemble_part(task.station, part_to_assemble)
 
                 self.ceiling_robot_move_to_joint_position(f"ceiling_as{task.station}_js_")
+
+        return True
 
     def fromMsg(self, pose):
         o1 = pose.orientation

@@ -5,12 +5,14 @@ import yaml
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    IncludeLaunchDescription,
     OpaqueFunction,
 )
 
 from moveit_configs_utils import MoveItConfigsBuilder
 
 from launch.substitutions import Command, FindExecutable, PathJoinSubstitution, LaunchConfiguration
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition
 from launch_ros.actions import Node
 
@@ -103,9 +105,16 @@ def launch_setup(context, *args, **kwargs):
         condition=IfCondition(start_rviz)
     )
 
+    move_group = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            [FindPackageShare("ariac_moveit_config"), "/launch", "/ariac_robots_moveit.launch.py"]
+        )
+    )
+
     nodes_to_start = [
         moveit_py_test,
-        rviz_node
+        rviz_node,
+        move_group
     ]
 
     return nodes_to_start
