@@ -28,7 +28,6 @@ from moveit.core.robot_trajectory import RobotTrajectory
 from moveit.core.robot_state import RobotState, robotStateToRobotStateMsg
 from moveit_msgs.srv import GetCartesianPath, GetPositionFK, ApplyPlanningScene, GetPlanningScene
 from moveit.core.kinematic_constraints import construct_joint_constraint
-from moveit.trajectory_procesing import time_optimal_trajectory_generation
 
 from ariac_msgs.msg import (
     CompetitionState as CompetitionStateMsg,
@@ -409,8 +408,8 @@ class CompetitionInterface(Node):
                                                            self.conveyor_parts_cb,
                                                            qos_profile_sensor_data,
                                                            callback_group=self.ariac_cb_group)
-        self.conveyor_parts_mutex = Lock()
-        self.convyoer_camera_sub = self.create_subscription(AdvancedLogicalCameraImage,
+        self.conveyor_parts_mutex = False
+        self.conveyor_camera_sub = self.create_subscription(AdvancedLogicalCameraImageMsg,
                                                             '/ariac/sensors/conveyor_camera/image',
                                                             self.conveyor_camera_cb,
                                                             qos_profile_sensor_data,
@@ -419,7 +418,7 @@ class CompetitionInterface(Node):
         self.conveyor_camera_pose = Pose()
 
         self.breakbeam_sub_ = self.create_subscription(BreakBeamStatus,
-                                                       '/ariac/sensors/conveyor_breakbeam/change',
+                                                       '/ariac/sensors/conveyor_breakbeam/status',
                                                        self.break_beam_cb,
                                                        qos_profile_sensor_data,
                                                        callback_group=self.ariac_cb_group)
@@ -1299,6 +1298,8 @@ class CompetitionInterface(Node):
 
         for kitting_part in kitting_task._parts:
             found = self.floor_robot_pick_bin_part(kitting_part._part)
+            if not found:
+                self.floor_robot_pick_conveyor_part(kitting_part.part)
             self._floor_robot_place_part_on_kit_tray(kitting_task._agv_number, kitting_part.quadrant)
         
         self.move_agv(kitting_task._agv_number, kitting_task._destination)
@@ -1955,6 +1956,8 @@ class CompetitionInterface(Node):
         count = 1
         for assembly_part in task.parts:
             found = self.floor_robot_pick_bin_part(assembly_part.part)
+            if not found:
+                self.floor_robot_pick_conveyor_part(assembly_part.part)
             self._floor_robot_place_part_on_kit_tray(agv_number, count)
             count+=1
         
@@ -2048,13 +2051,13 @@ class CompetitionInterface(Node):
         count = 0
 
         if self.breakbeam_status:
-            while self.conveyor_parts_mutex.locked():
-                self.wait(0.2)
-            self.conveyor_parts_mutex.acquire()
-
+            while self.conveyor_parts_mutex:
+                pass
+            self.conveyor_parts_mutex = True
+            self.get_logger().info("After mutex in cb"*1000)
             for part in self.conveyor_part_detected:
                 part_pose = multiply_pose(self.conveyor_camera_pose, part.pose)
-                distance = abs(part_pose.posiiton.y - self.breakbeam_pose.position.y)
+                distance = abs(part_pose.position.y - self.breakbeam_pose.position.y)
                 if count == 0:
                     part_to_add = part
                     detection_time = time.time()
@@ -2065,8 +2068,9 @@ class CompetitionInterface(Node):
                         part_to_add = part
                         detection_time = time.time()
                         prev_distance = distance
-            self.conveyor_parts.append(part_to_add, detection_time)
-            self.conveyor_parts_mutex.release()
+            self.conveyor_parts.append((part_to_add, detection_time))
+            self.conveyor_parts_mutex = False
+            self.get_logger().info(str(len(self.conveyor_parts))+"\n"*10)
         
     
     def floor_robot_pick_conveyor_part(self, part_to_pick : PartMsg):
@@ -2093,28 +2097,36 @@ class CompetitionInterface(Node):
 
         while num_tries < 3 and  not part_picked:
             self.floor_robot_move_to_joint_position("floor_conveyor_js_")
+            self.get_logger().info("After the initial movement")
         
             while not found_part:
-                while self.conveyor_parts_mutex.locked():
-                    self.wait(0.2)
-                self.conveyor_parts_mutex.acquire()
+                while self.conveyor_parts_mutex:
+                    pass
+                self.conveyor_parts_mutex = True
                 temp_parts_list = deepcopy(self.conveyor_parts)
                 for item in temp_parts_list:
                     part = item[0]
-                    part : PartMsg
+                    self.get_logger().info(str(type(part)))
+                    try:
+                        part = part.part
+                    except:
+                        pass
                     if part.type == part_to_pick.type and part.color == part_to_pick.color:
+                        self.get_logger().info("Inside of part if")
                         part_pose = multiply_pose(self.conveyor_camera_pose, part.pose)
                         detection_time = item[1]
-
                         elapsed_time = time.time() - detection_time
                         current_part_position = part_pose.position.y - elapsed_time * self.conveyor_speed
+                        self.get_logger().info(str(current_part_position))
                         if current_part_position > 0:
                             time_to_pick = current_part_position / self.conveyor_speed
+                            self.get_logger().info(str(time_to_pick))
                             if time_to_pick>5.0:
                                 found_part = True
                                 self.conveyor_parts.remove(item)
                                 break
                         self.conveyor_parts.remove(item)
+                self.conveyor_parts_mutex = False
             
             part_rotation = rpy_from_quaternion(part_pose.orientation)[2]
             
@@ -2123,6 +2135,7 @@ class CompetitionInterface(Node):
             waypoints = [build_pose(part_pose.position.x, robot_pose.position.y,
                                     part_pose.position.z + 0.15, quaternion_from_euler(0.0,pi,part_rotation))]
             self._move_floor_robot_cartesian(waypoints, 0.5, 0.5)
+            self.get_logger().info("After first cart movement")
 
             elapsed_time = time.time() - detection_time
             current_part_position = part_pose.position.y - (elapsed_time * self.conveyor_speed)
@@ -2134,7 +2147,9 @@ class CompetitionInterface(Node):
                 continue
 
             waypoints = [build_pose(part_pose.position.x, robot_pose.position.y,
-                                part_pose.position.z + self._part_heights[part_to_pick.tpe], quaternion_from_euler(0.0,pi,part_rotation))]
+                                part_pose.position.z + self._part_heights[part_to_pick.type], quaternion_from_euler(0.0,pi,part_rotation))]
             self._move_floor_robot_cartesian(waypoints, 0.5, 0.5)
+
+            self.get_logger().info("At the end")
 
             

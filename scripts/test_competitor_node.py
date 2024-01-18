@@ -25,7 +25,12 @@ def main(args=None):
     interface.start_competition()
  
 
-    interface.complete_orders()
+    # interface.complete_orders()
+    part = Part()
+    part.type = Part.BATTERY
+    part.color = Part.BLUE
+
+    interface.floor_robot_pick_conveyor_part(part)
 
     interface.destroy_node()
     rclpy.shutdown()
