@@ -2040,7 +2040,9 @@ class CompetitionInterface(Node):
         self.conveyor_camera_pose = msg._sensor_pose
     
     def break_beam_cb(self, msg : BreakBeamStatus):
+        self.get_logger().info("part_count: "+str(len(self.conveyor_parts))+"\n"*10)
         if not self.breakbeam_recieved_data:
+            self.get_logger().info("IN BREAKBEAM LOOP")
             self.breakbeam_recieved_data = True
             self.breakbeam_pose = self._frame_world_pose(msg.header.frame_id)
         
@@ -2054,7 +2056,6 @@ class CompetitionInterface(Node):
             while self.conveyor_parts_mutex:
                 pass
             self.conveyor_parts_mutex = True
-            self.get_logger().info("After mutex in cb"*1000)
             for part in self.conveyor_part_detected:
                 part_pose = multiply_pose(self.conveyor_camera_pose, part.pose)
                 distance = abs(part_pose.position.y - self.breakbeam_pose.position.y)
@@ -2097,36 +2098,35 @@ class CompetitionInterface(Node):
 
         while num_tries < 3 and  not part_picked:
             self.floor_robot_move_to_joint_position("floor_conveyor_js_")
-            self.get_logger().info("After the initial movement")
         
             while not found_part:
+                self.get_logger().info(str(len(self.conveyor_parts)), once=True)
                 while self.conveyor_parts_mutex:
                     pass
                 self.conveyor_parts_mutex = True
                 temp_parts_list = deepcopy(self.conveyor_parts)
                 for item in temp_parts_list:
                     part = item[0]
-                    self.get_logger().info(str(type(part)))
+                    temp_part = deepcopy(part)
                     try:
-                        part = part.part
+                        temp_part = part.part
                     except:
                         pass
-                    if part.type == part_to_pick.type and part.color == part_to_pick.color:
-                        self.get_logger().info("Inside of part if")
+                    if temp_part.type == part_to_pick.type and temp_part.color == part_to_pick.color:
                         part_pose = multiply_pose(self.conveyor_camera_pose, part.pose)
                         detection_time = item[1]
                         elapsed_time = time.time() - detection_time
                         current_part_position = part_pose.position.y - elapsed_time * self.conveyor_speed
-                        self.get_logger().info(str(current_part_position))
                         if current_part_position > 0:
                             time_to_pick = current_part_position / self.conveyor_speed
-                            self.get_logger().info(str(time_to_pick))
                             if time_to_pick>5.0:
                                 found_part = True
-                                self.conveyor_parts.remove(item)
+                                # self.conveyor_parts.remove(item)
+                                self.get_logger().info("conveyor_parts length: "+str(len(self.conveyor_parts)))
                                 break
                         self.conveyor_parts.remove(item)
                 self.conveyor_parts_mutex = False
+            self.get_logger().info("Out of while loop")
             
             part_rotation = rpy_from_quaternion(part_pose.orientation)[2]
             

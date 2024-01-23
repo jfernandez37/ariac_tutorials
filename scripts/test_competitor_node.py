@@ -22,15 +22,14 @@ def main(args=None):
     interface.move_floor_robot_home()
     interface.move_ceiling_robot_home()
 
-    interface.start_competition()
- 
+    interface.start_competition() 
 
-    # interface.complete_orders()
-    part = Part()
-    part.type = Part.BATTERY
-    part.color = Part.BLUE
+    interface.complete_orders()
+    # part = Part()
+    # part.type = Part.BATTERY
+    # part.color = Part.BLUE
 
-    interface.floor_robot_pick_conveyor_part(part)
+    # interface.floor_robot_pick_conveyor_part(part)
 
     interface.destroy_node()
     rclpy.shutdown()
