@@ -7,7 +7,7 @@ import time
 import PyKDL
 from sympy import Quaternion
 from ament_index_python import get_package_share_directory
-from moveit import MoveItPy, PlanningSceneMonitor
+from moveit.planning import MoveItPy
 import rclpy
 import pyassimp
 import yaml
@@ -420,7 +420,7 @@ class CompetitionInterface(Node):
 
         self.breakbeam_sub_ = self.create_subscription(BreakBeamStatus,
                                                        '/ariac/sensors/conveyor_breakbeam/status',
-                                                       self.break_beam_cb,
+                                                       self.breakbeam_cb,
                                                        qos_profile_sensor_data,
                                                        callback_group=self.ariac_cb_group)
         self.breakbeam_recieved_data = False
@@ -797,45 +797,6 @@ class CompetitionInterface(Node):
         else:
             self.get_logger().warn('Unable to lock tray')
 
-    def move_agv_to_station(self, num, station):
-        '''
-        Move an AGV to an assembly station.
-        Args:
-            num (int): AGV number
-            station (int): Assembly station number
-        Raises:
-            KeyboardInterrupt: Exception raised when the user presses Ctrl+C
-        '''
-
-        # Create a client to send a request to the `/ariac/move_agv` service.
-        mover = self.create_client(
-            MoveAGV,
-            f'/ariac/move_agv{num}')
-
-        # Create a request object.
-        request = MoveAGV.Request()
-
-        # Set the request location.
-        if station in [AssemblyTaskMsg.AS1, AssemblyTaskMsg.AS3]:
-            request.location = MoveAGV.Request.ASSEMBLY_FRONT
-        else:
-            request.location = MoveAGV.Request.ASSEMBLY_BACK
-
-        # Send the request.
-        future = mover.call_async(request)
-
-        # Wait for the server to respond.
-        try:
-            rclpy.spin_until_future_complete(self, future)
-        except KeyboardInterrupt as kb_error:
-            raise KeyboardInterrupt from kb_error
-
-        # Check the result of the service call.
-        if future.result().success:
-            self.get_logger().info(f'Moved AGV{num} to {self._stations[station]}')
-        else:
-            self.get_logger().warn(future.result().message)  
-
     def set_floor_robot_gripper_state(self, state):
         '''Set the gripper state of the floor robot.
 
@@ -1046,6 +1007,7 @@ class CompetitionInterface(Node):
             trajectory.set_robot_trajectory_msg(scene.current_state, trajectory_msg)
             trajectory.joint_model_group_name = "floor_robot"
         self._ariac_robots_state.update(True)
+        self._ariac_robots
         self._ariac_robots.execute(trajectory, controllers=[])
     
     def floor_robot_plan_cartesian(self, waypoints, velocity, acceleration, avoid_collision = True):
@@ -1211,7 +1173,6 @@ class CompetitionInterface(Node):
         part_pose = Pose()
         found_part = False
         bin_side = ""
-        
         for part in self._left_bins_parts:
             part : PartPoseMsg
             if (part.part.type == part_to_pick.type and part.part.color == part_to_pick.color):
@@ -1231,7 +1192,6 @@ class CompetitionInterface(Node):
         
         if not found_part:
             self.get_logger().error("Unable to locate part")
-            return False
         else:
             self.get_logger().info(f"Part found in {bin_side}")
 
@@ -1242,37 +1202,26 @@ class CompetitionInterface(Node):
                 station = "kts2"
             self.floor_robot_move_to_joint_position(f"floor_{station}_js_")
             self._floor_robot_change_gripper(station, "parts")
-            
+
         self.floor_robot_move_to_joint_position(bin_side)
         part_rotation = rpy_from_quaternion(part_pose.orientation)[2]
         
         gripper_orientation = quaternion_from_euler(0.0,pi,part_rotation)
+        self._move_floor_robot_to_pose(build_pose(part_pose.position.x, part_pose.position.y,
+                                                  part_pose.position.z+0.5, gripper_orientation))
 
         waypoints = [build_pose(part_pose.position.x, part_pose.position.y,
-                                part_pose.position.z+0.5, 
-                                gripper_orientation),
-                                build_pose(part_pose.position.x, part_pose.position.y,
                                 part_pose.position.z+CompetitionInterface._part_heights[part_to_pick.type]+0.008,
                                 gripper_orientation)]
         self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
         self.set_floor_robot_gripper_state(True)
-        self._floor_robot_wait_for_attach(5.0, gripper_orientation)
-        
-        
+        self._floor_robot_wait_for_attach(30.0, gripper_orientation)
+
         self.floor_robot_move_to_joint_position(bin_side)
-        self.get_logger().info("After movement up")
+
         self._attach_model_to_floor_gripper(part_to_pick, part_pose)
 
         self.floor_robot_attached_part_ = part_to_pick
-        self.get_logger().info("Part attached. Attempting to move up")
-        waypoints = [build_pose(part_pose.position.x, part_pose.position.y,
-                                part_pose.position.z+0.5,
-                                gripper_orientation)]
-        self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, False)
-        
-        self.get_logger().info("After move up")
-
-        return True
     
     def complete_orders(self):
         while len(self._orders) == 0:
@@ -1544,11 +1493,16 @@ class CompetitionInterface(Node):
         except KeyboardInterrupt as kb_error:
             raise KeyboardInterrupt from kb_error
 
-        # Check the result of the service call.
-        while (self._agv_locations[agv_num] in [AGVStatusMsg.KITTING,destination,AGVStatusMsg.UNKNOWN]):
+        timeout = 22
+        start = time.time()
+
+        while (time.time() - start < timeout):
             if (self._agv_locations[agv_num] == destination):
                 self.get_logger().info(f'Moved AGV{agv_num} to {self._destinations[destination]}')
-                return True  
+                return True
+
+        self.get_logger().info(f"Unable to move AGV {agv_num} to {self._destinations[destination]}")
+        return False; 
                     
     def _makeAttachedMesh(self, name, pose, filename, robot) -> AttachedCollisionObject:
         with pyassimp.load(filename) as scene:
@@ -1912,7 +1866,7 @@ class CompetitionInterface(Node):
         with self._planning_scene_monitor.read_write() as scene:
             current_pose = scene.current_state.get_pose("ceiling_gripper")
         
-        away = PyKDL.Vector(-0.1,0,0) if part.part.type == ariac_msgs.msg.Part.REGULATOR else PyKDL.Vector(0,0,0.1)
+        away = PyKDL.Vector(-0.1,0,0) if part.part.type == PartMsg.REGULATOR else PyKDL.Vector(0,0,0.1)
         
         waypoints = [self.toMsg(insert*PyKDL.Frame(away)*part_assemble*part_to_gripper)]
 
@@ -2072,7 +2026,7 @@ class CompetitionInterface(Node):
         self.conveyor_part_detected = msg._part_poses
         self.conveyor_camera_pose = msg._sensor_pose
     
-    def break_beam_cb(self, msg : BreakBeamStatus):
+    def breakbeam_cb(self, msg : BreakBeamStatus):
         # self.get_logger().info("part_count: "+str(len(self.conveyor_parts))+"\n"*10)
         if not self.breakbeam_recieved_data:
             self.get_logger().info("IN BREAKBEAM LOOP")

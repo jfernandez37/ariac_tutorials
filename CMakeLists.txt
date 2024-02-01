@@ -37,6 +37,7 @@ install(PROGRAMS
 
 install(DIRECTORY
   launch
+  meshes
   DESTINATION share/${PROJECT_NAME}
 )
 
