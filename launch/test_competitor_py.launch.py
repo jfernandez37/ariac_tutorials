@@ -89,7 +89,7 @@ def launch_setup(context, *args, **kwargs):
     start_rviz = LaunchConfiguration("rviz")
 
     rviz_config_file = PathJoinSubstitution(
-        [FindPackageShare("test_competitor"), "rviz", "test_competitor.rviz"]
+        [FindPackageShare("ariac_tutorials"), "rviz", "competitor.rviz"]
     )
 
     rviz_node = Node(

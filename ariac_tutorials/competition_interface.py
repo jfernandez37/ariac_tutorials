@@ -13,7 +13,7 @@ import pyassimp
 import yaml
 from asyncio import Lock
 from copy import deepcopy
-from rclpy.time import Duration
+from rclpy.time import Duration, Time
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.parameter import Parameter
@@ -350,7 +350,7 @@ class CompetitionInterface(Node):
         self.planning_scene_msg = PlanningScene()
 
         # Meshes file path
-        self.mesh_file_path = get_package_share_directory("test_competitor") + "/meshes/"
+        self.mesh_file_path = get_package_share_directory("ariac_tutorials") + "/meshes/"
 
         self.ceiling_joint_positions_arrs = {
             "ceiling_as1_js_":[1,-3,1.571,0,-2.37,2.37,3.14,-1.57,0],
@@ -862,9 +862,9 @@ class CompetitionInterface(Node):
         Raises:
             KeyboardInterrupt: Exception raised when the user presses Ctrl+C
         '''
-        start = self.get_clock().now()
+        start = self.time_now()
 
-        while self.get_clock().now() <= start + Duration(seconds=duration):
+        while self.time_now() <= start + Duration(seconds=duration):
             try:
                 rclpy.spin_once(self)
             except KeyboardInterrupt as kb_error:
@@ -2061,7 +2061,6 @@ class CompetitionInterface(Node):
                         prev_distance = distance
             self.conveyor_parts.append((part_to_add, detection_time))
             self.conveyor_parts_mutex = False
-            self.get_logger().info(str(len(self.conveyor_parts))+"\n"*10)
         else:
             self.part_already_scanned = False
         
@@ -2109,8 +2108,8 @@ class CompetitionInterface(Node):
                     if temp_part.type == part_to_pick.type and temp_part.color == part_to_pick.color:
                         part_pose = multiply_pose(self.conveyor_camera_pose, part.pose)
                         detection_time = item[1]
-                        elapsed_time = self.get_clock().now().nanoseconds - detection_time
-                        current_part_position = part_pose.position.y - elapsed_time * self.conveyor_speed
+                        elapsed_time = self.time_now().nanoseconds - detection_time
+                        current_part_position = part_pose.position.y - elapsed_time/(10**10) * self.conveyor_speed
                         if current_part_position > 0:
                             time_to_pick = current_part_position / self.conveyor_speed
                             if time_to_pick>5.0:
@@ -2134,8 +2133,8 @@ class CompetitionInterface(Node):
             self._move_floor_robot_cartesian(waypoints, 0.5, 0.5)
             self.get_logger().info("After first cart movement")
 
-            elapsed_time = self.get_clock().now().nanoseconds - detection_time
-            current_part_position = part_pose.position.y - (elapsed_time * self.conveyor_speed)
+            elapsed_time = self.time_now().nanoseconds - detection_time
+            current_part_position = part_pose.position.y - (elapsed_time/(10**10) * self.conveyor_speed)
 
             if current_part_position < 0:
                 self.get_logger().info("Part has passed the pick location")
@@ -2155,16 +2154,14 @@ class CompetitionInterface(Node):
                 trajectory = RobotTrajectory(self._ariac_robots.get_robot_model())
                 trajectory.set_robot_trajectory_msg(scene.current_state, trajectory_msg)
                 trajectory.joint_model_group_name = "floor_robot"
-            self.get_logger().info(str(type(trajectory.duration)))
-            trajectory_time = trajectory.duration
-            t = self.get_clock().now()
-            self.get_logger().info("now: "+str(t.nanoseconds))
-            self.get_logger().info("detection_time: "+str(detection_time))
-            self.get_logger().info("elapsed_time: "+str(elapsed_time))
-            self.get_logger().info("time to pick: "+str(time_to_pick))
-            self.get_logger().info("trajectory time: "+str(trajectory_time))
-            while t.nanoseconds < ((detection_time + elapsed_time + time_to_pick - trajectory_time)-2.75*(10**8)):
-                t = self.get_clock().now()
+            trajectory_time = 488516783
+            self.get_logger().info("\n"*10+"now: "+str(self.time_now()))
+            self.get_logger().info("detection_time: "+str(type(detection_time)))
+            self.get_logger().info("elapsed_time: "+str(type(elapsed_time)))
+            self.get_logger().info("time to pick: "+str(type(time_to_pick*(10**9))))
+            self.get_logger().info("trajectory time: "+str(type(trajectory_time))+"\n"*10)
+            while self.time_now().nanoseconds < ((detection_time + elapsed_time + time_to_pick*(10**9) - trajectory_time)-2.75*(10**8)):
+                self.get_logger().info("Comparison: " + str((detection_time + elapsed_time + time_to_pick*(10**9) - trajectory_time)-2.75*(10**8)))
                 self.get_logger().info("Waiting for part to arrive at pick location", once = True)
             
             self.set_floor_robot_gripper_state(True)
@@ -2187,4 +2184,5 @@ class CompetitionInterface(Node):
             num_tries+=1
         return True
 
-            
+    def time_now(self):
+        return self.get_clock().now()
