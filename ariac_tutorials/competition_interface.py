@@ -85,8 +85,8 @@ class Error(Exception):
 class ConveyorPart():
     def __init__(self, part, pose, detection_time):
         self.pose_stamped = PoseStamped()
-        self.pose_stamped.frame_id = "world"
-        self.pose_stamped.stamp = detection_time
+        self.pose_stamped.header.frame_id = "world"
+        self.pose_stamped.header.stamp = detection_time
         self.pose_stamped.pose = pose
 
         self.part = part
@@ -418,7 +418,6 @@ class CompetitionInterface(Node):
                                                            self.conveyor_parts_cb,
                                                            qos_profile_sensor_data,
                                                            callback_group=self.ariac_cb_group)
-        self.conveyor_parts_mutex = False
         self.conveyor_camera_sub = self.create_subscription(AdvancedLogicalCameraImageMsg,
                                                             '/ariac/sensors/conveyor_camera/image',
                                                             self.conveyor_camera_cb,
@@ -2036,9 +2035,6 @@ class CompetitionInterface(Node):
         prev_distance = 0
         count = 0
         if not self._object_detected and msg.object_detected:
-            while self.conveyor_parts_mutex:
-                pass
-            self.conveyor_parts_mutex = True
             for part in self.conveyor_part_detected:
                 part_pose = multiply_pose(self.conveyor_camera_pose, part.pose)
                 distance = abs(part_pose.position.y - self.breakbeam_pose.position.y)
@@ -2052,13 +2048,11 @@ class CompetitionInterface(Node):
                         part_to_add = part
                         detection_time = self.time_now().nanoseconds
                         prev_distance = distance
-            
-            self.conveyor_parts.append((part_to_add, detection_time))
-            self.conveyor_parts_mutex = False
+            self.conveyor_parts.append(ConveyorPart(part_to_add.part, part_to_add.pose, detection_time))
         self._object_detected = msg.object_detected
         
-    def get_time_at_pick_position(conv_part):
-
+    def get_time_at_pick_position(self, conv_part : ConveyorPart):
+        return (conv_part.pose_stamped.header.stamp+(conv_part.pose_stamped.pose.position.y/self.conveyor_speed * 10**9))
     
     def floor_robot_pick_conveyor_part(self, part_to_pick : PartMsg):
         if len(self.conveyor_parts_expected)==0:
@@ -2087,33 +2081,22 @@ class CompetitionInterface(Node):
         
             while not found_part:
                 self.get_logger().info(str(len(self.conveyor_parts)))
-                while self.conveyor_parts_mutex:
-                    self.get_logger().info("INSIDE mutex loop: "+str(len(self.conveyor_parts)))
-                    pass
-                self.conveyor_parts_mutex = True
                 temp_parts_list = deepcopy(self.conveyor_parts)
-                for item in temp_parts_list:
+                for i in range(len(temp_parts_list)):
+                    conv_part = temp_parts_list[i]
+                    conv_part : ConveyorPart
                     self.get_logger().info("INSIDE FOR LOOP: "+str(len(self.conveyor_parts)))
-                    part = item[0]
-                    temp_part = deepcopy(part)
-                    try:
-                        temp_part = part.part
-                    except:
-                        pass
-                    if temp_part.type == part_to_pick.type and temp_part.color == part_to_pick.color:
-                        part_pose = multiply_pose(self.conveyor_camera_pose, part.pose)
-                        detection_time = item[1]
-                        elapsed_time = self.time_now().nanoseconds - detection_time
-                        current_part_position = part_pose.position.y - (elapsed_time/(10**9) * self.conveyor_speed)
-                        if current_part_position > 0:
-                            time_to_pick = current_part_position / self.conveyor_speed
-                            if time_to_pick>5.0:
-                                found_part = True
-                                # self.conveyor_parts.remove(item)
-                                self.get_logger().info("conveyor_parts length: "+str(len(self.conveyor_parts)))
-                                break
-                        self.conveyor_parts.remove(item)
-                self.conveyor_parts_mutex = False
+                    conv_part.part
+                    if conv_part.part.type == part_to_pick.type and conv_part.part.color == part_to_pick.color:
+                        part_pose = multiply_pose(self.conveyor_camera_pose, conv_part.pose_stamped.pose)
+                        if self.get_time_at_pick_position(conv_part)-self.time_now().nanoseconds>5.0*(10**9):
+                            found_part = True
+                            pick_time = self.get_time_at_pick_position(conv_part)
+                            # self.conveyor_parts.remove(item)
+                            self.get_logger().info("conveyor_parts length: "+str(len(self.conveyor_parts)))
+                            break
+                        del self.conveyor_parts[i]
+                self.wait(3.0)
                 
                 self.get_logger().info(f"Waiting for {self._part_colors[part_to_pick.color]} {self._part_types[part_to_pick.type]} to arrive on the conveyor",throttle_duration_sec=4.0)
 
@@ -2127,15 +2110,6 @@ class CompetitionInterface(Node):
                                     part_pose.position.z + 0.15, quaternion_from_euler(0.0,pi,part_rotation))]
             self._move_floor_robot_cartesian(waypoints, 0.5, 0.5, False)
             self.get_logger().info("After first cart movement")
-
-            elapsed_time = self.time_now().nanoseconds - detection_time
-            current_part_position = part_pose.position.y - (elapsed_time/(10**10) * self.conveyor_speed)
-
-            if current_part_position < 0:
-                self.get_logger().info("Part has passed the pick location")
-                found_part = False
-                num_tries+=1
-                continue
 
             waypoints = [build_pose(part_pose.position.x, robot_pose.position.y,
                                     part_pose.position.z + self._part_heights[part_to_pick.type] - 0.001, quaternion_from_euler(0.0,pi,part_rotation))]
@@ -2159,14 +2133,11 @@ class CompetitionInterface(Node):
 
             trajectory_time = Duration.from_msg(trajectory.get_robot_trajectory_msg().joint_trajectory.points[-1].time_from_start)
             self.get_logger().info("\n"*10+"now: "+str(self.time_now()))
-            self.get_logger().info("detection_time: "+str((detection_time)))
-            self.get_logger().info("elapsed_time: "+str((elapsed_time)))
-            self.get_logger().info("time to pick: "+str((time_to_pick*(10**9))))
             self.get_logger().info("trajectory time: "+str((trajectory_time))+"\n"*10)
             time_now = self.time_now()
             self.t = time_now
 
-            while time_now.nanoseconds < (time_to_pick*(10**9) - trajectory_time.nanoseconds):
+            while time_now.nanoseconds < (pick_time - trajectory_time.nanoseconds):
                 time_now = self.time_now()
                 self.get_logger().info("Waiting for part to arrive at pick location", once = True)
                 self.wait(0.1)
