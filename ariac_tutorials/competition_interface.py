@@ -2,7 +2,7 @@ from argparse import _MutuallyExclusiveGroup
 from distutils.command import build
 from time import sleep
 from math import cos, sin, pi
-from copy import copy
+from copy import copy, deepcopy
 import time
 import PyKDL
 from sympy import Quaternion
@@ -11,8 +11,6 @@ from moveit.planning import MoveItPy
 import rclpy
 import pyassimp
 import yaml
-from asyncio import Lock
-from copy import deepcopy
 from rclpy.time import Duration, Time
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -22,6 +20,8 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallb
 from geometry_msgs.msg import PoseStamped, Pose, Point, TransformStamped
 from shape_msgs.msg import Mesh, MeshTriangle
 from moveit_msgs.msg import CollisionObject, AttachedCollisionObject, PlanningScene
+from moveit_msgs.msg import RobotTrajectory as RobotTrajectoryMsg
+from trajectory_msgs.msg import JointTrajectoryPoint
 from std_msgs.msg import Header
 
 from moveit.core.robot_trajectory import RobotTrajectory
@@ -81,6 +81,15 @@ class Error(Exception):
 
   def __str__(self):
       return repr(self.value)
+
+class ConveyorPart():
+    def __init__(self, part, pose, detection_time):
+        self.pose_stamped = PoseStamped()
+        self.pose_stamped.frame_id = "world"
+        self.pose_stamped.stamp = detection_time
+        self.pose_stamped.pose = pose
+
+        self.part = part
   
 class CompetitionInterface(Node):
     '''
@@ -461,27 +470,6 @@ class CompetitionInterface(Node):
         self._orders.append(order)
         if self._parse_incoming_order:
             self.get_logger().info(self._parse_order(order))
-
-    def _advanced_camera0_cb(self, msg: AdvancedLogicalCameraImageMsg):
-        '''Callback for the topic /ariac/sensors/advanced_camera_0/image
-
-        Arguments:
-            msg -- AdvancedLogicalCameraImage message
-        '''
-        self._camera_image = AdvancedLogicalCameraImage(msg.part_poses,
-                                                        msg.tray_poses,
-                                                        msg.sensor_pose)
-
-    def _breakbeam0_cb(self, msg: BreakBeamStatusMsg):
-        '''Callback for the topic /ariac/sensors/breakbeam_0/status
-
-        Arguments:
-            msg -- BreakBeamStatusMsg message
-        '''
-        if not self._object_detected and msg.object_detected:
-            self._conveyor_part_count += 1
-
-        self._object_detected = msg.object_detected
 
     def _competition_state_cb(self, msg: CompetitionStateMsg):
         '''Callback for the topic /ariac/competition_state
@@ -1007,6 +995,14 @@ class CompetitionInterface(Node):
             trajectory = RobotTrajectory(self._ariac_robots.get_robot_model())
             trajectory.set_robot_trajectory_msg(scene.current_state, trajectory_msg)
             trajectory.joint_model_group_name = "floor_robot"
+
+            trajectory_msg: RobotTrajectoryMsg
+            point : JointTrajectoryPoint
+            point = trajectory_msg.joint_trajectory.points[-1]
+            dur = Duration(seconds=point.time_from_start.sec, nanoseconds=point.time_from_start.nanosec)
+
+            self.get_logger().info(f"Motion will take {dur.nanoseconds} nanoseconds to complete")
+
         self._ariac_robots_state.update(True)
         self._ariac_robots.execute(trajectory, controllers=[])
     
@@ -2035,35 +2031,34 @@ class CompetitionInterface(Node):
             self.breakbeam_recieved_data = True
             self.breakbeam_pose = self._frame_world_pose(msg.header.frame_id)
         
-        self.breakbeam_status = msg.object_detected
         part_to_add = PartMsg()
-        detection_time = time.time()
+        detection_time = self.time_now().nanoseconds
         prev_distance = 0
         count = 0
-
-        if self.breakbeam_status and not self.part_already_scanned:
+        if not self._object_detected and msg.object_detected:
             while self.conveyor_parts_mutex:
                 pass
             self.conveyor_parts_mutex = True
-            self.part_already_scanned = True
             for part in self.conveyor_part_detected:
                 part_pose = multiply_pose(self.conveyor_camera_pose, part.pose)
                 distance = abs(part_pose.position.y - self.breakbeam_pose.position.y)
                 if count == 0:
                     part_to_add = part
-                    detection_time = time.time()
+                    detection_time = self.time_now().nanoseconds
                     prev_distance = distance
                     count+=1
                 else:
                     if distance < prev_distance:
                         part_to_add = part
-                        detection_time = time.time()
+                        detection_time = self.time_now().nanoseconds
                         prev_distance = distance
+            
             self.conveyor_parts.append((part_to_add, detection_time))
             self.conveyor_parts_mutex = False
-        else:
-            self.part_already_scanned = False
+        self._object_detected = msg.object_detected
         
+    def get_time_at_pick_position(conv_part):
+
     
     def floor_robot_pick_conveyor_part(self, part_to_pick : PartMsg):
         if len(self.conveyor_parts_expected)==0:
@@ -2109,7 +2104,7 @@ class CompetitionInterface(Node):
                         part_pose = multiply_pose(self.conveyor_camera_pose, part.pose)
                         detection_time = item[1]
                         elapsed_time = self.time_now().nanoseconds - detection_time
-                        current_part_position = part_pose.position.y - elapsed_time/(10**10) * self.conveyor_speed
+                        current_part_position = part_pose.position.y - (elapsed_time/(10**9) * self.conveyor_speed)
                         if current_part_position > 0:
                             time_to_pick = current_part_position / self.conveyor_speed
                             if time_to_pick>5.0:
@@ -2121,7 +2116,7 @@ class CompetitionInterface(Node):
                 self.conveyor_parts_mutex = False
                 
                 self.get_logger().info(f"Waiting for {self._part_colors[part_to_pick.color]} {self._part_types[part_to_pick.type]} to arrive on the conveyor",throttle_duration_sec=4.0)
-                self.wait(3.0)
+
             self.get_logger().info("Out of while loop")
             
             part_rotation = rpy_from_quaternion(part_pose.orientation)[2]
@@ -2130,7 +2125,7 @@ class CompetitionInterface(Node):
                 robot_pose = scene.current_state.get_pose("floor_gripper")
             waypoints = [build_pose(part_pose.position.x, robot_pose.position.y,
                                     part_pose.position.z + 0.15, quaternion_from_euler(0.0,pi,part_rotation))]
-            self._move_floor_robot_cartesian(waypoints, 0.5, 0.5)
+            self._move_floor_robot_cartesian(waypoints, 0.5, 0.5, False)
             self.get_logger().info("After first cart movement")
 
             elapsed_time = self.time_now().nanoseconds - detection_time
@@ -2143,7 +2138,7 @@ class CompetitionInterface(Node):
                 continue
 
             waypoints = [build_pose(part_pose.position.x, robot_pose.position.y,
-                                part_pose.position.z + self._part_heights[part_to_pick.type], quaternion_from_euler(0.0,pi,part_rotation))]
+                                    part_pose.position.z + self._part_heights[part_to_pick.type] - 0.001, quaternion_from_euler(0.0,pi,part_rotation))]
 
             with self._planning_scene_monitor.read_write() as scene:
                 # instantiate a RobotState instance using the current robot model
@@ -2154,15 +2149,27 @@ class CompetitionInterface(Node):
                 trajectory = RobotTrajectory(self._ariac_robots.get_robot_model())
                 trajectory.set_robot_trajectory_msg(scene.current_state, trajectory_msg)
                 trajectory.joint_model_group_name = "floor_robot"
-            trajectory_time = 488516783
+            # trajectory_time = 488516783
+            
+            # trajectory_msg: RobotTrajectoryMsg
+            # point : JointTrajectoryPoint
+            # point = trajectory_msg.joint_trajectory.points[-1]
+            # dur = Duration(point.time_from_start.sec, point.time_from_start.nanosec)
+            
+
+            trajectory_time = Duration.from_msg(trajectory.get_robot_trajectory_msg().joint_trajectory.points[-1].time_from_start)
             self.get_logger().info("\n"*10+"now: "+str(self.time_now()))
-            self.get_logger().info("detection_time: "+str(type(detection_time)))
-            self.get_logger().info("elapsed_time: "+str(type(elapsed_time)))
-            self.get_logger().info("time to pick: "+str(type(time_to_pick*(10**9))))
-            self.get_logger().info("trajectory time: "+str(type(trajectory_time))+"\n"*10)
-            while self.time_now().nanoseconds < ((detection_time + elapsed_time + time_to_pick*(10**9) - trajectory_time)-2.75*(10**8)):
-                self.get_logger().info("Comparison: " + str((detection_time + elapsed_time + time_to_pick*(10**9) - trajectory_time)-2.75*(10**8)))
+            self.get_logger().info("detection_time: "+str((detection_time)))
+            self.get_logger().info("elapsed_time: "+str((elapsed_time)))
+            self.get_logger().info("time to pick: "+str((time_to_pick*(10**9))))
+            self.get_logger().info("trajectory time: "+str((trajectory_time))+"\n"*10)
+            time_now = self.time_now()
+            self.t = time_now
+
+            while time_now.nanoseconds < (time_to_pick*(10**9) - trajectory_time.nanoseconds):
+                time_now = self.time_now()
                 self.get_logger().info("Waiting for part to arrive at pick location", once = True)
+                self.wait(0.1)
             
             self.set_floor_robot_gripper_state(True)
             self._ariac_robots.execute(trajectory, controllers=[])

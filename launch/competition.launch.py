@@ -142,4 +142,7 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument("rviz", default_value="false", description="start rviz node?")
     )
+    declared_arguments.append(
+        DeclareLaunchArgument("record_state", default_value="false", description="Record state?")
+    )
     return LaunchDescription(declared_arguments + [OpaqueFunction(function=launch_setup)])
