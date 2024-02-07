@@ -114,7 +114,7 @@ def launch_setup(context, *args, **kwargs):
     nodes_to_start = [
         moveit_py_test,
         rviz_node,
-        move_group
+        # move_group
     ]
 
     return nodes_to_start
