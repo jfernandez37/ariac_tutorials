@@ -782,7 +782,7 @@ class CompetitionInterface(Node):
         with self._planning_scene_monitor.read_write() as scene:
             self._floor_robot.set_start_state(robot_state = scene.current_state)
             self._floor_robot.set_goal_state(configuration_name="home")
-        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger(),"floor_robot", sleep_time=0.0)
+        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger(),"floor_robot")
         with self._planning_scene_monitor.read_write() as scene:
             scene.current_state.update()
             self._ariac_robots_state = scene.current_state
