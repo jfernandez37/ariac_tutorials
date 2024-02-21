@@ -8,29 +8,17 @@ robot_cameras:
     type: rgbd
 
 static_sensors:
-  right_bins_camera:
+  bin1_camera:
     type: advanced_logical_camera
     pose:
-      xyz: [-2.286, 2.96, 1.8]
+      xyz: [0.27, -2.325, 1.8]
       rpy: [pi, pi/2, 0]
 
-  left_bins_camera:
+  bin2_camera:
     type: advanced_logical_camera
     pose:
-      xyz: [-2.286, -2.96, 1.8]
+      xyz: [0.27, 2.8, 1.8]
       rpy: [pi, pi/2, 0]
-
-  kts1_camera:
-    type: advanced_logical_camera
-    pose:
-      xyz: [-1.3, -5.8, 1.8]
-      rpy: [pi, pi/2, pi/2]
-  
-  kts2_camera:
-    type: advanced_logical_camera
-    pose:
-      xyz: [-1.3, 5.8, 1.8]
-      rpy: [pi, pi/2, -pi/2]
   
   conveyor_breakbeam:
     type: break_beam
