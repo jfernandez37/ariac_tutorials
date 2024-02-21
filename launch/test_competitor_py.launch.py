@@ -85,6 +85,10 @@ def launch_setup(context, *args, **kwargs):
         parameters=[
             parameters_dict
         ],
+        arguments=['--ros-args', '--log-level', 'moveit:=error', 
+                   '--log-level', 'moveit_ros:=error', 
+                   '--log-level', 'moveit_trajectory_processing:=error',
+                   ]
     )
     start_rviz = LaunchConfiguration("rviz")
 

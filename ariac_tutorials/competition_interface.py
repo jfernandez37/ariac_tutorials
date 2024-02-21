@@ -4,6 +4,8 @@ from time import sleep
 from math import cos, sin, pi
 from copy import copy, deepcopy
 import time
+import threading
+from functools import partial
 import PyKDL
 from sympy import Quaternion
 from ament_index_python import get_package_share_directory
@@ -188,6 +190,7 @@ class CompetitionInterface(Node):
         self.set_parameters([sim_time])
         
         # ROS2 callback groups
+        self.sensor_cb_group = MutuallyExclusiveCallbackGroup()
         self.ariac_cb_group = MutuallyExclusiveCallbackGroup()
         self.moveit_cb_group = MutuallyExclusiveCallbackGroup()
         self.orders_cb_group = ReentrantCallbackGroup()
@@ -297,22 +300,22 @@ class CompetitionInterface(Node):
                                                              "/ariac/sensors/left_bins_camera/image",
                                                              self._left_bins_camera_cb,
                                                              qos_profile_sensor_data,
-                                                             callback_group=self.moveit_cb_group)
+                                                             callback_group=self.sensor_cb_group)
         self.right_bins_camera_sub = self.create_subscription(AdvancedLogicalCameraImageMsg,
                                                              "/ariac/sensors/right_bins_camera/image",
                                                              self._right_bins_camera_cb,
                                                              qos_profile_sensor_data,
-                                                             callback_group=self.moveit_cb_group)
+                                                             callback_group=self.sensor_cb_group)
         self.kts1_camera_sub_ = self.create_subscription(AdvancedLogicalCameraImageMsg,
                                                          "/ariac/sensors/kts1_camera/image",
                                                          self._kts1_camera_cb,
                                                          qos_profile_sensor_data,
-                                                             callback_group=self.moveit_cb_group)
+                                                             callback_group=self.sensor_cb_group)
         self.kts2_camera_sub_ = self.create_subscription(AdvancedLogicalCameraImageMsg,
                                                          "/ariac/sensors/kts2_camera/image",
                                                          self._kts2_camera_cb,
                                                          qos_profile_sensor_data,
-                                                         callback_group=self.moveit_cb_group)
+                                                         callback_group=self.sensor_cb_group)
         
         # AGV status subs
         self._agv_locations = {i+1:-1 for i in range(4)}
@@ -422,18 +425,19 @@ class CompetitionInterface(Node):
                                                             '/ariac/sensors/conveyor_camera/image',
                                                             self.conveyor_camera_cb,
                                                             qos_profile_sensor_data,
-                                                            callback_group=self.ariac_cb_group)
+                                                            callback_group=self.sensor_cb_group)
         self.conveyor_parts_detected = []
         self.conveyor_camera_pose = Pose()
         self.conveyor_camera_image = None
         self.part_already_scanned = False
         self.last_conveyor_image_time = None
+        self.part_count = 0
 
         self.breakbeam_sub_ = self.create_subscription(BreakBeamStatus,
                                                        '/ariac/sensors/conveyor_breakbeam/change',
                                                        self.breakbeam_cb,
                                                        qos_profile_sensor_data,
-                                                       callback_group=self.ariac_cb_group)
+                                                       callback_group=self.sensor_cb_group)
         self.breakbeam_recieved_data = False
         self.breakbeam_pose = Pose()
         self.breakbeam_status = False
@@ -883,7 +887,6 @@ class CompetitionInterface(Node):
         robot_type,
         single_plan_parameters=None,
         multi_plan_parameters=None,
-        sleep_time=0.0,
     ):
         """Helper function to plan and execute a motion."""
         # plan to goal
@@ -949,31 +952,27 @@ class CompetitionInterface(Node):
             scene.current_state.update(True)
             self._ariac_robots_state = scene.current_state
 
-        self._ariac_robots.execute(trajectory, controllers=[])
+        self.async_execute(trajectory,[])
 
     def _move_floor_robot_to_pose(self,pose : Pose):
-        self.get_logger().info(str(pose))
         with self._planning_scene_monitor.read_write() as scene:
             self._floor_robot.set_start_state(robot_state = scene.current_state)
 
             pose_goal = PoseStamped()
             pose_goal.header.frame_id = "world"
             pose_goal.pose = pose
-            self.get_logger().info(str(pose_goal.pose))
             self._floor_robot.set_goal_state(pose_stamped_msg=pose_goal, pose_link="floor_gripper")
         
         while not self._plan_and_execute(self._ariac_robots, self._floor_robot, self.get_logger(), "floor_robot"):
             pass
     
     def _move_ceiling_robot_to_pose(self, pose: Pose):
-        self.get_logger().info(str(pose))
         with self._planning_scene_monitor.read_write() as scene:
             self._ceiling_robot.set_start_state(robot_state = scene.current_state)
 
             pose_goal = PoseStamped()
             pose_goal.header.frame_id = "world"
             pose_goal.pose = pose
-            self.get_logger().info(str(pose_goal.pose))
             self._ceiling_robot.set_goal_state(pose_stamped_msg=pose_goal, pose_link="ceiling_gripper")
         
         while not self._plan_and_execute(self._ariac_robots, self._ceiling_robot, self.get_logger(), "ceiling_robot"):
@@ -1940,20 +1939,17 @@ class CompetitionInterface(Node):
         self.conveyor_camera_image = msg
     
     def breakbeam_cb(self, msg : BreakBeamStatus):
-        # self.get_logger().info("part_count: "+str(len(self.conveyor_parts))+"\n"*10)
         if not self.breakbeam_recieved_data:
             self.breakbeam_recieved_data = True
             self.breakbeam_pose = self._frame_world_pose(msg.header.frame_id)
         
-        if self.conveyor_camera_image is not None and msg.object_detected:
-            for part_pose in self.conveyor_camera_image.part_poses:
-                part_pose: PartPoseMsg
-                part_world_pose = multiply_pose(self.conveyor_camera_image.sensor_pose, part_pose.pose)
-
-                if abs(part_world_pose.position.y - self.breakbeam_pose.position.y) < 0.11:
-                    self.conveyor_parts.append(ConveyorPart(part_pose.part, part_world_pose, self.last_conveyor_image_time))
-                    self.info_log(self.conveyor_parts)
-                    break
+        self.info_log(f"Conveyor images part poses length: {len(self.conveyor_camera_image.part_poses)}")
+        if self.conveyor_camera_image is not None and msg.object_detected and len(self.conveyor_camera_image.part_poses)>0:
+            part_y_positions = [p.pose.position.y for p in self.conveyor_camera_image.part_poses]
+            part_pose = self.conveyor_camera_image.part_poses[part_y_positions.index(max(part_y_positions))]
+            part_world_pose = multiply_pose(self.conveyor_camera_image.sensor_pose, part_pose.pose)
+            self.conveyor_parts.append(ConveyorPart(part_pose.part, part_world_pose, self.last_conveyor_image_time))
+                
         
     def get_time_at_pick_position(self, conv_part : ConveyorPart):
         time_to_y_zero = abs(conv_part.pose.position.y)/self.conveyor_speed
@@ -1976,8 +1972,13 @@ class CompetitionInterface(Node):
         num_tries = 0
 
         if self._floor_robot_gripper_state.type != "part_gripper":
-            self.floor_robot_move_to_joint_position("floor_kts2_js_")
-            self._floor_robot_change_gripper("kts2", "parts")
+            with self._planning_scene_monitor.read_write() as scene:
+                current_pose = scene.current_state.get_pose("floor_gripper")
+            s = "1"
+            if current_pose.position.y > 0:
+                s = "2"
+            self.floor_robot_move_to_joint_position(f"floor_kts{s}_js_")
+            self._floor_robot_change_gripper(f"kts{s}", "parts")
         
         self.get_logger().info("Moving floor robot to conveyor pick location")
 
@@ -2013,7 +2014,7 @@ class CompetitionInterface(Node):
 
             # Plan trajectory to pick part
             waypoints = [build_pose(part_pose.position.x, 0.0,
-                                    part_pose.position.z + self._part_heights[part_to_pick.type] - 0.002, 
+                                    part_pose.position.z + self._part_heights[part_to_pick.type] - (0.002 if part_to_pick.type != PartMsg.PUMP else -0.002), 
                                     quaternion_from_euler(0.0, pi, part_rotation))]
                 
             trajectory_msg = self._call_get_cartesian_path(waypoints, 1.0, 1.0, False, "floor_robot")
@@ -2026,7 +2027,7 @@ class CompetitionInterface(Node):
             
             # Calculate the duration of the movement
             trajectory_time = Duration.from_msg(trajectory.get_robot_trajectory_msg().joint_trajectory.points[-1].time_from_start)
-            buffer = Duration(seconds=0.2) 
+            buffer = Duration(seconds=0.3) 
 
             # Wait for the part to arrive at pick location
             self.set_floor_robot_gripper_state(True)
@@ -2040,73 +2041,45 @@ class CompetitionInterface(Node):
 
             # Move up
             self.info_log("Moving up")
-            waypoints = [build_pose(part_pose.position.x, 0.0, part_pose.position.z + offset, 
+            waypoints = [build_pose(part_pose.position.x, 0.0, part_pose.position.z + 0.5, 
                                     quaternion_from_euler(0.0, pi, part_rotation))]
             self._move_floor_robot_cartesian(waypoints, 1.0, 1.0, False)
 
             # Check that part is attached
-            if (self._floor_robot_gripper_state.attached):
-                self.info_log("Part picked successfully")
-                self.floor_robot_attached_part_ = part_to_pick
+            timeout = 3.0
+            start_time = time.time()
+            attached = False
+            self.info_log("Before while loop")
+            while timeout>time.time()-start_time:
+                if (self._floor_robot_gripper_state.attached):
+                    self.info_log("Part picked successfully")
+                    self.floor_robot_attached_part_ = part_to_pick
+                    attached = True
+                    break
+            self.info_log("After while loop")
+            if attached:
                 break
-
             num_tries += 1
-            
-            # self.get_logger().info(f"Waiting for {self._part_colors[part_to_pick.color]} {self._part_types[part_to_pick.type]} to arrive on the conveyor",throttle_duration_sec=4.0)
-
-            # self.get_logger().info("Out of while loop")
-            
-            # part_rotation = rpy_from_quaternion(part_pose.orientation)[2]
-            
-            # with self._planning_scene_monitor.read_write() as scene:
-            #     robot_pose = scene.current_state.get_pose("floor_gripper")
-            # waypoints = [build_pose(part_pose.position.x, robot_pose.position.y,
-            #                         part_pose.position.z + 0.15, quaternion_from_euler(0.0,pi,part_rotation))]
-            # self._move_floor_robot_cartesian(waypoints, 0.5, 0.5, False)
-            # self.get_logger().info("After first cart movement")
-
-            # waypoints = [build_pose(part_pose.position.x, robot_pose.position.y,
-            #                         part_pose.position.z + self._part_heights[part_to_pick.type] - 0.001, quaternion_from_euler(0.0,pi,part_rotation))]
-
-            # with self._planning_scene_monitor.read_write() as scene:
-            #     # instantiate a RobotState instance using the current robot model
-            #     self._ariac_robots_state = scene.current_state
-            #     # Max step
-            #     self._ariac_robots_state.update()
-            #     trajectory_msg = self._call_get_cartesian_path(waypoints, 0.5, 0.5, True, "floor_robot")
-            #     trajectory = RobotTrajectory(self._ariac_robots.get_robot_model())
-            #     trajectory.set_robot_trajectory_msg(scene.current_state, trajectory_msg)
-            #     trajectory.joint_model_group_name = "floor_robot"
-            
-
-            # trajectory_time = Duration.from_msg(trajectory.get_robot_trajectory_msg().joint_trajectory.points[-1].time_from_start)
-            # self.get_logger().info("\n"*10+"now: "+str(self.time_now()))
-            # self.get_logger().info("trajectory time: "+str((trajectory_time))+"\n"*10)
-            # self.info_log(pick_time_for_part - trajectory_time.nanoseconds)
-            # time_now = self.time_now()
-            # while time_now < (pick_time_for_part - trajectory_time.nanoseconds):
-            #     time_now = self.time_now()
-            #     self.get_logger().info("Waiting for part to arrive at pick location", once = True)
-            # self.info_log("Part should be under gripper now")
-            # self.set_floor_robot_gripper_state(True)
-            # self._ariac_robots.execute(trajectory, controllers=[])
-
-            # waypoints = [build_pose(part_pose.position.x, robot_pose.position.y, robot_pose.position.z+0.1,
-            #                         quaternion_from_euler(0, pi, 0))]
-            # self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, True)
-
-            # if self._floor_robot_gripper_state.attached:
-            #     self._attach_model_to_floor_gripper(part_to_pick, part_pose)
-            #     self.get_logger().info("Attached part from conveyor")
-            #     self.floor_robot_attached_part_ = part_to_pick
-            #     part_picked = True
-            
-            # waypoints = [build_pose(part_pose.position.x, robot_pose.position.y, robot_pose.position.z+0.3,
-            #                         quaternion_from_euler(0, pi, 0))]
-            # self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, True)
-            # self.get_logger().info("At the end")
             
         return True
 
     def info_log(self, msg):
         self.get_logger().info(str(msg))
+    
+    def async_plan_execute(self,
+                      robot,
+                      planning_component,
+                      logger,
+                      robot_type
+                      ):
+        plan_and_execute_partial = partial(self._plan_and_execute, robot, planning_component, logger, robot_type)
+        plan_and_execute_thread = threading.Thread(target=plan_and_execute_partial)
+        plan_and_execute_thread.run()
+    
+    def async_execute(self,trajectory, controllers):
+        execute_partial = partial(self.ex, trajectory, controllers)
+        execute_thread = threading.Thread(target = execute_partial)
+        execute_thread.run()
+
+    def ex(self, trajectory, controllers):
+        self._ariac_robots.execute(trajectory, controllers=controllers)
