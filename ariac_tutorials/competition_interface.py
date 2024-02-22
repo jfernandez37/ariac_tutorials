@@ -871,6 +871,7 @@ class CompetitionInterface(Node):
         if result.fraction < 0.9:
             self.get_logger().error("Unable to plan cartesian trajectory")
 
+        self.get_logger().info("Returning cartesian path")
         return result.solution
     
     def _plan_and_execute(
@@ -1613,11 +1614,21 @@ class CompetitionInterface(Node):
     def _move_ceiling_robot_cartesian(self, waypoints, velocity, acceleration, avoid_collision = True):
         trajectory_msg = self._call_get_cartesian_path(waypoints, velocity, acceleration, avoid_collision, "ceiling_robot")
         with self._planning_scene_monitor.read_write() as scene:
+
             trajectory = RobotTrajectory(self._ariac_robots.get_robot_model())
-            trajectory.set_robot_trajectory_msg(self._ariac_robots_state, trajectory_msg)
+            trajectory.set_robot_trajectory_msg(scene.current_state, trajectory_msg)
             trajectory.joint_model_group_name = "ceiling_robot"
-        waypoints.clear()
-        self._ariac_robots_state.update(True)
+
+            trajectory_msg: RobotTrajectoryMsg
+            point : JointTrajectoryPoint
+            point = trajectory_msg.joint_trajectory.points[-1]
+            dur = Duration(seconds=point.time_from_start.sec, nanoseconds=point.time_from_start.nanosec)
+
+            self.get_logger().info(f"Motion will take {dur.nanoseconds} nanoseconds to complete")
+
+            scene.current_state.update(True)
+            self._ariac_robots_state = scene.current_state
+
         self._ariac_robots.execute(trajectory, controllers=[])
     
     def _ceiling_robot_wait_for_assemble(self, station : int, part : AssemblyPartMsg):
