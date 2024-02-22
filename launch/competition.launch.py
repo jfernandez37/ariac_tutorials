@@ -115,7 +115,7 @@ def launch_setup(context, *args, **kwargs):
         ),
         launch_arguments={
             'trial_name': trial_name,
-            'competitor_pkg': "nist_competitor",
+            'competitor_pkg': "ariac_tutorials",
             'dev_mode': "true",
             'record_state': record_state,
         }.items()
