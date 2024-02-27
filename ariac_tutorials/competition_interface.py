@@ -23,7 +23,7 @@ from trajectory_msgs.msg import JointTrajectoryPoint
 from std_msgs.msg import Header
 
 from moveit.core.robot_trajectory import RobotTrajectory
-from moveit.core.robot_state import RobotState, robotStateToRobotStateMsg
+from moveit.core.robot_state import robotStateToRobotStateMsg
 from moveit_msgs.srv import GetCartesianPath, GetPositionFK, ApplyPlanningScene, GetPlanningScene
 from moveit.core.kinematic_constraints import construct_joint_constraint
 from moveit.planning import PlanRequestParameters, PlanningComponent, PlanningSceneMonitor
@@ -901,7 +901,6 @@ class CompetitionInterface(Node):
         if plan_result:
             logger.info("Executing plan")
             with self._planning_scene_monitor.read_write() as scene:
-                scene.current_state.update(True)
                 robot_trajectory = plan_result.trajectory
             robot.execute(robot_trajectory, controllers=[])
         else:
@@ -927,7 +926,6 @@ class CompetitionInterface(Node):
         
         
         with self._planning_scene_monitor.read_write() as scene:
-            scene.current_state.update()
             self._floor_robot_home_quaternion = scene.current_state.get_pose("floor_gripper").orientation
     
     def move_ceiling_robot_home(self):
@@ -936,7 +934,6 @@ class CompetitionInterface(Node):
             self._ceiling_robot.set_goal_state(configuration_name="home")
         self._plan_and_execute(self._ariac_robots,self._ceiling_robot, self.get_logger(),"ceiling_robot", sleep_time=0.0)
         with self._planning_scene_monitor.read_write() as scene:
-            scene.current_state.update()
             self._ceiling_robot_home_quaternion = scene.current_state.get_pose("ceiling_gripper").orientation
 
     def _move_floor_robot_cartesian(self, waypoints, velocity, acceleration, avoid_collision = True):
@@ -953,8 +950,6 @@ class CompetitionInterface(Node):
             dur = Duration(seconds=point.time_from_start.sec, nanoseconds=point.time_from_start.nanosec)
 
             self.get_logger().info(f"Motion will take {dur.nanoseconds} nanoseconds to complete")
-
-            scene.current_state.update(True)
 
         self._ariac_robots.execute(trajectory, controllers=[])
 
@@ -1030,7 +1025,6 @@ class CompetitionInterface(Node):
         with self._planning_scene_monitor.read_write() as scene:
             scene.apply_collision_object(collision_object)
             self._world_collision_objects.append(collision_object)
-            scene.current_state.update()
     
     def add_objects_to_planning_scene(self):
         '''
@@ -1506,8 +1500,6 @@ class CompetitionInterface(Node):
             temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
             temp_scene.robot_state.attached_collision_objects.append(attached_collision_object)
             self.apply_planning_scene(temp_scene)
-            scene.current_state.update()
-    
     def _attach_model_to_floor_gripper(self, part_to_pick : PartMsg, part_pose : Pose):
         part_name = self._part_colors[part_to_pick.color]+"_"+self._part_types[part_to_pick.type]
 
@@ -1520,7 +1512,6 @@ class CompetitionInterface(Node):
             temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
             temp_scene.robot_state.attached_collision_objects.append(attached_collision_object)
             self.apply_planning_scene(temp_scene)
-            scene.current_state.update()
             
     def _remove_model_from_floor_gripper(self):
         self.get_logger().info("Removing attached part from floor gripper")
@@ -1530,11 +1521,9 @@ class CompetitionInterface(Node):
             temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
             temp_scene.robot_state.attached_collision_objects.clear()
             self.apply_planning_scene(temp_scene)
-            scene.current_state.update()
     
     def ceiling_robot_move_to_joint_position(self, position_name : str):
         with self._planning_scene_monitor.read_write() as scene:
-            scene.current_state.update()
             self._ceiling_robot.set_start_state(robot_state=scene.current_state)
             scene.current_state.joint_positions = self.ceiling_position_dict[position_name]
             joint_constraint = construct_joint_constraint(
@@ -1632,8 +1621,6 @@ class CompetitionInterface(Node):
             dur = Duration(seconds=point.time_from_start.sec, nanoseconds=point.time_from_start.nanosec)
 
             self.get_logger().info(f"Motion will take {dur.nanoseconds} nanoseconds to complete")
-
-            scene.current_state.update(True)
 
         self._ariac_robots.execute(trajectory, controllers=[])
     
@@ -1733,7 +1720,6 @@ class CompetitionInterface(Node):
             temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
             temp_scene.robot_state.attached_collision_objects.append(attached_collision_object)
             self.apply_planning_scene(temp_scene)
-            scene.current_state.update()
             
     def _remove_model_from_ceiling_gripper(self):
         self.get_logger().info("Removing attached part from ceiling gripper")
@@ -1743,7 +1729,6 @@ class CompetitionInterface(Node):
             temp_scene.robot_state = robotStateToRobotStateMsg(scene.current_state)
             temp_scene.robot_state.attached_collision_objects.clear()
             self.apply_planning_scene(temp_scene)
-            scene.current_state.update()
     
     def ceiling_robot_assemble_part(self, station : int, part : AssemblyPartMsg):
         if not self._ceiling_robot_gripper_state.attached:
@@ -1777,8 +1762,6 @@ class CompetitionInterface(Node):
 
             waypoints.append(self.toMsg(insert * PyKDL.Frame(install * -0.1) * part_assemble * part_to_gripper))
         
-
-        
         self._move_ceiling_robot_cartesian(waypoints, 0.3, 0.3, False)
         sleep(1)
         
@@ -1792,9 +1775,6 @@ class CompetitionInterface(Node):
         self.set_ceiling_robot_gripper_state(False)
 
         self._remove_model_from_ceiling_gripper()
-
-        with self._planning_scene_monitor.read_write() as scene:
-            current_pose = scene.current_state.get_pose("ceiling_gripper")
         
         away = PyKDL.Vector(-0.1,0,0) if part.part.type == PartMsg.REGULATOR else PyKDL.Vector(0,0,0.1)
         
@@ -2062,60 +2042,6 @@ class CompetitionInterface(Node):
                 break
 
             num_tries += 1
-            
-            # self.get_logger().info(f"Waiting for {self._part_colors[part_to_pick.color]} {self._part_types[part_to_pick.type]} to arrive on the conveyor",throttle_duration_sec=4.0)
-
-            # self.get_logger().info("Out of while loop")
-            
-            # part_rotation = rpy_from_quaternion(part_pose.orientation)[2]
-            
-            # with self._planning_scene_monitor.read_write() as scene:
-            #     robot_pose = scene.current_state.get_pose("floor_gripper")
-            # waypoints = [build_pose(part_pose.position.x, robot_pose.position.y,
-            #                         part_pose.position.z + 0.15, quaternion_from_euler(0.0,pi,part_rotation))]
-            # self._move_floor_robot_cartesian(waypoints, 0.5, 0.5, False)
-            # self.get_logger().info("After first cart movement")
-
-            # waypoints = [build_pose(part_pose.position.x, robot_pose.position.y,
-            #                         part_pose.position.z + self._part_heights[part_to_pick.type] - 0.001, quaternion_from_euler(0.0,pi,part_rotation))]
-
-            # with self._planning_scene_monitor.read_write() as scene:
-            #     # instantiate a RobotState instance using the current robot model
-            #     self._ariac_robots_state = scene.current_state
-            #     # Max step
-            #     self._ariac_robots_state.update()
-            #     trajectory_msg = self._call_get_cartesian_path(waypoints, 0.5, 0.5, True, "floor_robot")
-            #     trajectory = RobotTrajectory(self._ariac_robots.get_robot_model())
-            #     trajectory.set_robot_trajectory_msg(scene.current_state, trajectory_msg)
-            #     trajectory.joint_model_group_name = "floor_robot"
-            
-
-            # trajectory_time = Duration.from_msg(trajectory.get_robot_trajectory_msg().joint_trajectory.points[-1].time_from_start)
-            # self.get_logger().info("\n"*10+"now: "+str(self.time_now()))
-            # self.get_logger().info("trajectory time: "+str((trajectory_time))+"\n"*10)
-            # self.info_log(pick_time_for_part - trajectory_time.nanoseconds)
-            # time_now = self.time_now()
-            # while time_now < (pick_time_for_part - trajectory_time.nanoseconds):
-            #     time_now = self.time_now()
-            #     self.get_logger().info("Waiting for part to arrive at pick location", once = True)
-            # self.info_log("Part should be under gripper now")
-            # self.set_floor_robot_gripper_state(True)
-            # self._ariac_robots.execute(trajectory, controllers=[])
-
-            # waypoints = [build_pose(part_pose.position.x, robot_pose.position.y, robot_pose.position.z+0.1,
-            #                         quaternion_from_euler(0, pi, 0))]
-            # self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, True)
-
-            # if self._floor_robot_gripper_state.attached:
-            #     self._attach_model_to_floor_gripper(part_to_pick, part_pose)
-            #     self.get_logger().info("Attached part from conveyor")
-            #     self.floor_robot_attached_part_ = part_to_pick
-            #     part_picked = True
-            
-            # waypoints = [build_pose(part_pose.position.x, robot_pose.position.y, robot_pose.position.z+0.3,
-            #                         quaternion_from_euler(0, pi, 0))]
-            # self._move_floor_robot_cartesian(waypoints, 0.3, 0.3, True)
-            # self.get_logger().info("At the end")
             
         return True
 
