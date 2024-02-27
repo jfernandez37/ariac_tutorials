@@ -26,6 +26,7 @@ from moveit.core.robot_trajectory import RobotTrajectory
 from moveit.core.robot_state import RobotState, robotStateToRobotStateMsg
 from moveit_msgs.srv import GetCartesianPath, GetPositionFK, ApplyPlanningScene, GetPlanningScene
 from moveit.core.kinematic_constraints import construct_joint_constraint
+from moveit.planning import PlanRequestParameters
 
 from ariac_msgs.msg import (
     CompetitionState as CompetitionStateMsg,
@@ -911,10 +912,22 @@ class CompetitionInterface(Node):
         return True
 
     def move_floor_robot_home(self):
+        
+        # Set the start state and goal state for the robot
         with self._planning_scene_monitor.read_write() as scene:
             self._floor_robot.set_start_state(robot_state = scene.current_state)
             self._floor_robot.set_goal_state(configuration_name="home")
-        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger(),"floor_robot", sleep_time=0.0)
+        
+        # Create the plan request parameters 
+        single_plan_parameters = PlanRequestParameters(self._ariac_robots, "floor_robot")
+        single_plan_parameters.max_acceleration_scaling_factor = 1.0
+        single_plan_parameters.max_velocity_scaling_factor = 1.0
+        single_plan_parameters.planning_pipeline = "ompl"
+
+        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger(), robot_type="floor_robot", single_plan_parameters=single_plan_parameters)
+        
+        
+        
         with self._planning_scene_monitor.read_write() as scene:
             scene.current_state.update()
             self._ariac_robots_state = scene.current_state
@@ -1562,7 +1575,12 @@ class CompetitionInterface(Node):
                     joint_model_group=self._ariac_robots.get_robot_model().get_joint_model_group("floor_robot"),
             )
             self._floor_robot.set_goal_state(motion_plan_constraints=[joint_constraint])
-        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger(), robot_type="floor_robot")
+            self._ariac_robots_state = scene.current_state
+            single_plan_parameters = PlanRequestParameters(self._ariac_robots, "floor_robot")
+            single_plan_parameters.max_acceleration_scaling_factor = 1.0
+            single_plan_parameters.max_velocity_scaling_factor = 1.0
+            single_plan_parameters.planning_pipeline = "ompl"
+        self._plan_and_execute(self._ariac_robots,self._floor_robot, self.get_logger(), robot_type="floor_robot", single_plan_parameters=single_plan_parameters)
   
     def _create_floor_joint_position_state(self, joint_positions : list)-> dict:
         return {"linear_actuator_joint":joint_positions[0],
