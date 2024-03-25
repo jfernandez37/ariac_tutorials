@@ -23,14 +23,6 @@ ament_python_install_package(${PROJECT_NAME} SCRIPTS_DESTINATION lib/${PROJECT_N
 
 # Install Python executables
 install(PROGRAMS
-  scripts/tutorial_1.py
-  scripts/tutorial_2.py
-  scripts/tutorial_3.py
-  scripts/tutorial_4.py
-  scripts/tutorial_5.py
-  scripts/tutorial_6.py
-  scripts/tutorial_9.py
-  scripts/tutorial_10.py
   scripts/test_competitor_node.py
   DESTINATION lib/${PROJECT_NAME}
 )

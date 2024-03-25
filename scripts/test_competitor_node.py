@@ -9,6 +9,19 @@ import rclpy
 from ariac_tutorials.competition_interface import CompetitionInterface
 from ariac_msgs.msg import Part
 from rclpy.executors import MultiThreadedExecutor
+from ariac_tutorials.utils import (
+    multiply_pose,
+    rpy_from_quaternion,
+    rad_to_deg_str,
+    quaternion_from_euler,
+    build_pose,
+    AdvancedLogicalCameraImage,
+    Order,
+    KittingTask,
+    CombinedTask,
+    AssemblyTask,
+    KittingPart
+)
 
 def main(args=None):
     rclpy.init(args=args)
@@ -22,7 +35,8 @@ def main(args=None):
     
 
     interface.start_competition() 
-
+    __import__("time").sleep(2.0)
+    
     interface.move_floor_robot_home()
     interface.move_ceiling_robot_home()
     

@@ -88,7 +88,7 @@ def launch_setup(context, *args, **kwargs):
         parameters=[
             parameters_dict
         ],
-        arguments=['--ros-args', '--log-level', 'move_group_interface:=warn', '--log-level', 'moveit_trajectory_processing.time_optimal_trajectory_generation:=error']
+        # arguments=['--ros-args', '--log-level', 'move_group_interface:=warn', '--log-level', 'moveit_trajectory_processing.time_optimal_trajectory_generation:=error']
     )
     start_rviz = LaunchConfiguration("rviz")
 
@@ -143,6 +143,6 @@ def generate_launch_description():
         DeclareLaunchArgument("rviz", default_value="false", description="start rviz node?")
     )
     declared_arguments.append(
-        DeclareLaunchArgument("record_state", default_value="true", description="Record state?")
+        DeclareLaunchArgument("record_state", default_value="false", description="Record state?")
     )
     return LaunchDescription(declared_arguments + [OpaqueFunction(function=launch_setup)])
